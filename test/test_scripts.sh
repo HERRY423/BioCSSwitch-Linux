@@ -25,5 +25,9 @@ if [ $rc -ne 0 ] && echo "$out" | grep -q "拒绝"; then ok "08765 rejected via 
 out="$(SANDBOX_HOME="$T/vh" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 9931 --dry-run 2>&1)"; rc=$?
 if [ $rc -eq 0 ] && echo "$out" | grep -q "DRY-RUN OK"; then ok "valid port passes guards in dry-run"; else no "valid port dry-run failed (rc=$rc): $out"; fi
 
+# 7.7 review: 畸形端口必须失败关闭（fail-closed），而不是绕过算术守卫
+out="$(SANDBOX_HOME="$T/vh2" "$ROOT/scripts/launch-virtual-sandbox.sh" --port 8765x --dry-run 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -q "拒绝"; then ok "malformed port 8765x rejected fail-closed"; else no "malformed port 8765x slipped guard (rc=$rc): $out"; fi
+
 echo "----"
 if [ $FAILS -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$FAILS FAILED"; exit 1; fi

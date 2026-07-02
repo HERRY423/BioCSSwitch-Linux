@@ -36,6 +36,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # —— 铁律断言：绝不使用真实目录 / 真实端口 ——
+[[ "$PORT" =~ ^[0-9]+$ ]] || { echo "拒绝：端口不是合法整数（$PORT）"; exit 1; }
 if (( 10#${PORT} == 8765 )); then echo "拒绝：端口 8765 是真实实例保留端口"; exit 1; fi
 _dd_real="${DATA_DIR:A}"; _real_real="${REAL_DIR:A}"
 if [[ "$_dd_real" == "$_real_real" ]]; then echo "拒绝：data-dir 的真实路径指向真实目录"; exit 1; fi

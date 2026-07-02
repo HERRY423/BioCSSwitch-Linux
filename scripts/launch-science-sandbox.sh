@@ -30,7 +30,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # —— 铁律断言：绝不使用真实目录 / 真实端口 ——
-if [[ "$DATA_DIR" == "$REAL_DIR" ]]; then echo "拒绝：data-dir 指向真实目录"; exit 1; fi
+_dd="${DATA_DIR:A}"; _rd="${REAL_DIR:A}"
+if [[ "$_dd" == "$_rd" ]]; then echo "拒绝：data-dir 的真实路径指向真实目录"; exit 1; fi
+[[ "$PORT" =~ ^[0-9]+$ ]] || { echo "拒绝：端口不是合法整数（$PORT）"; exit 1; }
 if (( 10#${PORT} == 8765 )); then echo "拒绝：端口 8765 是真实实例保留端口"; exit 1; fi
 
 # —— 首次：克隆运行时资产，绝不复制登录凭证 ——
