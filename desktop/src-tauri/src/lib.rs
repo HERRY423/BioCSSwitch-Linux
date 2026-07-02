@@ -222,7 +222,7 @@ fn stop_sandbox_inner(st: &mut AppState) {
     if let Some(root) = repo_root() {
         let stop = root.join("scripts/stop-science-sandbox.sh");
         if stop.is_file() {
-            let _ = Command::new("bash")
+            let _ = Command::new("zsh") // stop 脚本是 #!/bin/zsh（用了 ${VAR:A} realpath）
                 .arg(&stop)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -322,7 +322,7 @@ fn one_click_login(state: State<'_, Mutex<AppState>>) -> Result<serde_json::Valu
     let proxy_url = format!("http://127.0.0.1:{pport}/{secret}");
     let logf = open_log("sandbox.log").map_err(|e| format!("建日志失败：{e}"))?;
     let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
-    let status = Command::new("bash")
+    let status = Command::new("zsh") // launch 脚本是 #!/bin/zsh（用了 ${VAR:A} realpath）
         .arg(&launch)
         .arg("--port")
         .arg(sport.to_string())
