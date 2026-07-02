@@ -1,6 +1,6 @@
 :root{
   --bg:#f4f5f7; --panel:#ffffff; --ink:#1d1d1f; --sub:#8a8f98;
-  --line:#e6e8eb; --accent:#3b6ef6; --accent2:#2f5fe0;
+  --line:#e6e8eb; --accent:#c25a34; --accent2:#a94e2c;
   --green:#2fbf71; --amber:#e6a23c; --red:#e5484d; --field:#f6f7f9;
 }
 @media (prefers-color-scheme: dark){
@@ -45,7 +45,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .ports .fld{flex:1}
 .hero{width:100%;height:42px;border:none;border-radius:11px;color:#fff;font-size:14px;font-weight:700;
   background:linear-gradient(180deg,var(--accent),var(--accent2));cursor:pointer;
-  box-shadow:0 6px 16px rgba(59,110,246,.35);display:flex;align-items:center;justify-content:center;gap:8px}
+  box-shadow:0 6px 16px rgba(194,90,52,.34);display:flex;align-items:center;justify-content:center;gap:8px}
 .hero:active{transform:translateY(1px)}
 .hero:disabled{opacity:.55;cursor:default;box-shadow:none;transform:none}
 .subbtns{display:flex;gap:8px;margin-top:8px}
@@ -63,3 +63,8 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .link{color:var(--accent);cursor:pointer}
 .link:hover{text-decoration:underline}
 .hint{font-size:10.5px;color:var(--sub);margin-top:6px;line-height:1.5}
+.adv summary{font-size:11px;color:var(--sub);cursor:pointer;list-style:none;letter-spacing:.02em}
+.adv summary::-webkit-details-marker{display:none}
+.adv summary::before{content:"▸";font-size:9px;margin-right:5px;display:inline-block}
+.adv[open] summary::before{content:"▾"}
+.adv .ports{margin-top:9px}

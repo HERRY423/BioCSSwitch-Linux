@@ -22,6 +22,10 @@ function mockInvoke(cmd, args) {
       return Promise.resolve({ url: "http://127.0.0.1:8990" });
     case "run_doctor":
       return Promise.resolve("（预览模式：后端未运行，这里是占位文本）");
+    case "app_version":
+      return Promise.resolve("0.0.0-preview");
+    case "open_release_page":
+      return Promise.resolve(null);
     default:
       return Promise.resolve(null);
   }
@@ -47,9 +51,7 @@ function setLight(el, state) {
 
 function setBusy(on) {
   busy = on;
-  [els.oneClickBtn, els.startProxyBtn, els.stopBtn, els.saveKeyBtn].forEach(
-    (b) => (b.disabled = on)
-  );
+  [els.oneClickBtn, els.stopBtn, els.saveKeyBtn].forEach((b) => (b.disabled = on));
 }
 
 async function call(cmd, args) {
@@ -111,26 +113,16 @@ async function saveKey() {
     const masked = await call("save_provider_key", { provider: els.provider.value, key });
     window._keys[els.provider.value] = masked;
     reflectProvider();
-    setMsg("已保存到 ~/.csswitch/config.json（0600）。", "ok");
-  } catch (e) {
-    setMsg("保存 key 失败：" + e, "err");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function startProxy() {
-  setBusy(true);
-  setMsg("启动代理中…");
-  try {
+    setMsg("已保存，正在启动代理…", "ok");
+    // 存了 key 就自动起代理：省一步，且顺带验证这把 key 能不能用（绿灯即通）。
     await persistSettings();
     const r = await call("start_proxy");
-    setMsg("代理已启动，端口 " + r.port + "。", "ok");
-    await refreshStatus();
+    setMsg("已保存，代理已启动（端口 " + r.port + "）。点「一键越过登录」即可。", "ok");
   } catch (e) {
-    setMsg("启动代理失败：" + e, "err");
+    setMsg("保存或启动代理失败：" + e, "err");
   } finally {
     setBusy(false);
+    await refreshStatus();
   }
 }
 
@@ -181,6 +173,43 @@ async function runDoctor() {
   }
 }
 
+// 简单 semver 比较：a 是否比 b 新。
+function isNewer(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+// 轻量检查更新：查 GitHub 最新 Release 版本号，有新版就提示并打开下载页（不自动装）。
+async function checkUpdate() {
+  setMsg("检查更新中…");
+  let cur = "";
+  try { cur = await call("app_version"); } catch (e) {}
+  try {
+    const resp = await fetch(
+      "https://api.github.com/repos/SuperJJ007/CSswitch/releases/latest",
+      { headers: { Accept: "application/vnd.github+json" } }
+    );
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    const latest = (data.tag_name || "").replace(/^v/, "");
+    if (!latest) throw new Error("无版本信息");
+    if (isNewer(latest, cur)) {
+      setMsg("发现新版本 v" + latest + "（当前 v" + cur + "）。正在打开下载页…", "ok");
+      try { await call("open_release_page"); } catch (_) {}
+    } else {
+      setMsg("已是最新版本（v" + cur + "）。", "ok");
+    }
+  } catch (e) {
+    setMsg("无法自动检查更新（多为网络或代理限制）。已打开 Releases 页，请手动查看。", "err");
+    try { await call("open_release_page"); } catch (_) {}
+  }
+}
+
 async function refreshStatus() {
   try {
     const s = await call("status");
@@ -198,8 +227,8 @@ async function refreshStatus() {
 function wire() {
   [
     "provider", "keyLabel", "keyInput", "saveKeyBtn", "proxyPort", "sandboxPort",
-    "oneClickBtn", "startProxyBtn", "stopBtn", "ltProxy", "ltSandbox", "ltUpstream",
-    "msg", "brandDot", "openBrowserBtn", "doctorBtn", "quitBtn",
+    "oneClickBtn", "stopBtn", "ltProxy", "ltSandbox", "ltUpstream",
+    "msg", "brandDot", "openBrowserBtn", "doctorBtn", "updateBtn", "verLabel", "quitBtn",
   ].forEach((id) => (els[id] = $(id)));
 
   els.provider.addEventListener("change", async () => {
@@ -209,17 +238,18 @@ function wire() {
   els.proxyPort.addEventListener("change", persistSettingsSafe);
   els.sandboxPort.addEventListener("change", persistSettingsSafe);
   els.saveKeyBtn.addEventListener("click", saveKey);
-  els.startProxyBtn.addEventListener("click", startProxy);
   els.stopBtn.addEventListener("click", stopAll);
   els.oneClickBtn.addEventListener("click", oneClick);
   els.openBrowserBtn.addEventListener("click", openBrowser);
   els.doctorBtn.addEventListener("click", runDoctor);
+  els.updateBtn.addEventListener("click", checkUpdate);
   els.quitBtn.addEventListener("click", () => call("quit_app").catch(() => {}));
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
   wire();
   await loadConfig();
+  try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}
   await refreshStatus();
   if (PREVIEW) {
     setMsg("预览模式：仅看界面，按钮不连后端（真实 app 里会连进程管家）。");

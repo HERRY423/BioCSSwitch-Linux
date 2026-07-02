@@ -31,17 +31,17 @@
         <div class="hint">存本地 <code>~/.csswitch/config.json</code>（0600）；面板只回显末 4 位。</div>
       </div>
 
-      <div class="sec">
+      <details class="sec adv">
+        <summary>高级设置</summary>
         <div class="ports">
           <div class="fld"><label>代理端口</label><input id="proxyPort" inputmode="numeric" value="18991" /></div>
           <div class="fld"><label>沙箱端口</label><input id="sandboxPort" inputmode="numeric" value="8990" /></div>
         </div>
-      </div>
+      </details>
 
       <div class="sec">
         <button class="hero" id="oneClickBtn">⚡ 一键越过登录</button>
         <div class="subbtns">
-          <button class="btn" id="startProxyBtn">启动代理</button>
           <button class="btn" id="stopBtn">全部停止</button>
         </div>
       </div>
@@ -57,7 +57,11 @@
 
       <div class="foot">
         <span class="link" id="openBrowserBtn">打开浏览器面板 ↗</span>
-        <span class="link" id="doctorBtn">自检</span>
+        <span>
+          <span class="link" id="doctorBtn">自检</span>
+          <span class="link" id="updateBtn" style="margin-left:10px">检查更新</span>
+          <span id="verLabel" style="margin-left:10px;opacity:.65"></span>
+        </span>
       </div>
     </div>
     <script type="module" src="/main.js"></script>

@@ -535,6 +535,18 @@ fn run_doctor(app: tauri::AppHandle) -> Result<String, String> {
     Ok(text)
 }
 
+/// 当前 app 版本（供前端「检查更新」与页脚版本号用）。
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 打开 GitHub Releases 页（检查更新时用系统浏览器打开，浏览器走用户自己的代理）。
+#[tauri::command]
+fn open_release_page() -> Result<(), String> {
+    open_in_browser("https://github.com/SuperJJ007/CSswitch/releases/latest")
+}
+
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     // 默认：退 app 停代理、保留沙箱运行（spec §5.1）。
@@ -592,6 +604,8 @@ pub fn run() {
             status,
             open_url,
             run_doctor,
+            app_version,
+            open_release_page,
             quit_app
         ])
         .setup(|app| {
