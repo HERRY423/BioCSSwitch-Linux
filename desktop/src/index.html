@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CSSwitch</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/main.js" defer></script>
+  </head>
+  <body>
+    <div class="panel">
+      <div class="hd">
+        <div class="brand"><span id="brandDot" class="dot amber"></span>CSSwitch</div>
+        <div class="gear" id="quitBtn" title="退出 CSSwitch">退出</div>
+      </div>
+
+      <div class="sec">
+        <label>模型 / Provider</label>
+        <select id="provider">
+          <option value="deepseek">DeepSeek（原生 Anthropic 端点）</option>
+          <option value="qwen">通义千问 Qwen（DashScope 翻译）</option>
+        </select>
+      </div>
+
+      <div class="sec">
+        <label id="keyLabel">DeepSeek API Key</label>
+        <div class="row">
+          <input id="keyInput" type="password" placeholder="粘贴第三方 key（只存本地）" autocomplete="off" spellcheck="false" />
+          <button class="btn small" id="saveKeyBtn">保存</button>
+        </div>
+        <div class="hint">存本地 <code>~/.csswitch/config.json</code>（0600）；面板只回显末 4 位。</div>
+      </div>
+
+      <div class="sec">
+        <div class="ports">
+          <div class="fld"><label>代理端口</label><input id="proxyPort" inputmode="numeric" value="18991" /></div>
+          <div class="fld"><label>沙箱端口</label><input id="sandboxPort" inputmode="numeric" value="8990" /></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <button class="hero" id="oneClickBtn">⚡ 一键越过登录</button>
+        <div class="subbtns">
+          <button class="btn" id="startProxyBtn">启动代理</button>
+          <button class="btn" id="stopBtn">全部停止</button>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="status">
+          <div class="st"><span id="ltProxy" class="lt a"></span>代理</div>
+          <div class="st"><span id="ltSandbox" class="lt a"></span>沙箱</div>
+          <div class="st"><span id="ltUpstream" class="lt a"></span>上游</div>
+        </div>
+        <div class="msg" id="msg">就绪。</div>
+      </div>
+
+      <div class="foot">
+        <span class="link" id="openBrowserBtn">打开浏览器面板 ↗</span>
+        <span class="link" id="doctorBtn">自检</span>
+      </div>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
