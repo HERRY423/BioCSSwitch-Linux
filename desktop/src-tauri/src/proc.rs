@@ -118,8 +118,7 @@ pub fn http_get_body(
         Some(s) if !s.is_empty() => format!("/{s}{path_suffix}"),
         _ => path_suffix.to_string(),
     };
-    let req =
-        format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).ok()?;
     // 读完整响应（状态行 + 头 + 体）。上限防呆：模型列表通常 < 数十 KB，给 1 MiB。
     let mut buf = Vec::new();
