@@ -263,59 +263,61 @@ async function saveKey() {
   }
 }
 
-// 与后端 is_main_list_model 对齐：会平铺进 Science 选择器主列表的 id。
-function isMainListModel(id) {
-  for (const fam of ["claude-opus-", "claude-sonnet-", "claude-haiku-"]) {
-    if (id.startsWith(fam)) {
-      const c = id.charAt(fam.length);
-      return c >= "0" && c <= "9";
-    }
+// 渲染模型下拉：requires_override=false 时首项「（透传）」；按 supports_tools 排序标注。
+function renderModelSelect(models, requiresOverride, sourceLabel) {
+  const sel = els.relayModel;
+  sel.innerHTML = "";
+  if (!requiresOverride) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "（透传，用 Science 选择器）";
+    sel.appendChild(o);
   }
-  return false;
+  for (const m of models || []) {
+    const o = document.createElement("option");
+    o.value = m.id;
+    const tag = m.supports_tools === true ? " ·工具✓" : m.supports_tools === false ? " ·无工具" : "";
+    const src = sourceLabel ? " [" + sourceLabel + "]" : "";
+    o.textContent = m.id + tag + src;
+    sel.appendChild(o);
+  }
+  sel.onchange = refreshSaveGate;
 }
 
-function renderModels(models) {
-  const box = els.modelList;
-  box.innerHTML = "";
-  if (!models || !models.length) {
-    box.hidden = true;
-    return;
-  }
-  for (const id of models) {
-    const d = document.createElement("div");
-    d.className = "m" + (isMainListModel(id) ? " main" : "");
-    d.textContent = id;
-    box.appendChild(d);
-  }
-  box.hidden = false;
+// 门控：requires_model_override 且未选模型（值空）→ 禁用「保存并验证」。
+function refreshSaveGate() {
+  const p = currentPreset();
+  const needModel = p && p.requires_model_override;
+  const noModel = !els.relayModel.value;
+  els.saveRelayBtn.disabled = !!(needModel && noModel);
 }
 
-// 「获取模型」：把 base_url（+可能的新 key）交后端，起 relay 代理并回源拉中转站可用模型。
+// 「获取模型」：把 preset + base_url（+可能的新 key）交后端，起临时代理探 /v1/models。
 async function fetchModels() {
-  const base = els.relayBase.value.trim();
+  const p = currentPreset();
+  if (!p) return;
+  const base = p.base_url_editable ? els.relayBase.value.trim() : p.base_url;
   if (!base) {
     setMsg("请先填写中转站地址 base_url。", "err");
     return;
   }
   setBusy(true);
-  setMsg("获取模型中：起代理 → 回源拉 /v1/models…");
+  setMsg("获取模型中：起临时代理 → 探 /v1/models…");
   try {
     const key = els.keyInput.value.trim(); // 有新 key 就带上；为空则后端沿用已存
-    const r = await call("fetch_relay_models", { req: { base_url: base, key } });
+    const r = await call("fetch_relay_models", { req: { preset: p.id, base_url: base, key } });
     const models = (r && r.models) || [];
-    renderModels(models);
-    if (key) {
-      // 后端已把新 key 落盘；刷新掩码占位、清空输入框。
-      window._keys.relay = "•".repeat(Math.max(0, key.length - 4)) + key.slice(-4);
-      els.keyInput.value = "";
-      reflectProvider();
+    const kind = r && r.error_kind;
+    const srcLabel = r && r.source === "live" ? "实时" : r && r.source === "builtin" ? "内置" : "未验证";
+    renderModelSelect(models, p.requires_model_override, srcLabel);
+    if (kind === "network") {
+      setMsg("未能连上中转站验证，已铺内置模型（标「未验证」）。可仍试保存或重试。", "err");
+    } else {
+      setMsg("已获取 " + models.length + " 个模型（工具✓ 优先）。选一个后点「保存并验证」。", "ok");
     }
-    setMsg(
-      "已获取 " + models.length + " 个模型（加粗的会平铺进选择器，其余在「More models」）。点「一键开始」即可在 Science 里选用。",
-      "ok"
-    );
-    await refreshStatus();
+    refreshSaveGate();
   } catch (e) {
+    // auth 硬失败（后端 Err）：不铺列表，如实提示。
     setMsg("获取模型失败：" + e, "err");
   } finally {
     setBusy(false);
@@ -431,7 +433,34 @@ async function refreshStatus() {
   }
 }
 
-function reflectPreset() { /* Task 12 填充 */ }
+// 切预设：填 base_url（只读/自定义可编）、key 掩码占位、模型下拉（builtin 起点）、门控。
+function reflectPreset() {
+  const p = currentPreset();
+  if (!p) return;
+  const saved = relayCfg[p.id] || {};
+  // base_url：预设不可编 → 用预设值只读；自定义 → 用已存或空、可编。
+  if (p.base_url_editable) {
+    els.relayBase.value = saved.base_url || "";
+    els.relayBase.readOnly = false;
+    els.relayBaseHint.textContent = "自定义中转站根地址（自动补 /v1/messages 与 /v1/models）。";
+  } else {
+    els.relayBase.value = p.base_url;
+    els.relayBase.readOnly = true;
+    els.relayBaseHint.textContent = "预设地址已自动填好（只读）。填好上面的 Key 后点「获取模型」。";
+  }
+  // key 掩码占位（复用顶层 keyInput，reflectProvider 已处理；这里刷新 relay 专属占位）。
+  const maskedKey = saved.key || "";
+  els.keyInput.value = "";
+  els.keyInput.placeholder = maskedKey ? "已存：" + maskedKey : "粘贴中转站 key / token（只存本地）";
+  // 模型下拉：先用 builtin ∪ 已存 model 铺（无需触网）。
+  const builtin = (p.builtin_models || []).map((id) => ({ id, supports_tools: null }));
+  renderModelSelect(builtin, p.requires_model_override, "内置");
+  if (saved.model) els.relayModel.value = saved.model;
+  els.relayModelHint.textContent = p.requires_model_override
+    ? "该中转站需选一个模型（不认 claude-* / 无 /v1/models）。"
+    : "留「（透传）」则用 Science 选择器里的模型（claude-* 直传）。";
+  refreshSaveGate();
+}
 async function saveRelay(_skip) { /* Task 13 填充 */ }
 
 function wire() {
