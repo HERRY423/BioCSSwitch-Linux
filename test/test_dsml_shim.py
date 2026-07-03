@@ -464,6 +464,21 @@ class RewriterDsml(unittest.TestCase):
         self.assertIn("done searching", texts)
         self.assertEqual(self._stop_reason(evs), "tool_use")
 
+    def test_open_block_closed_before_message_stop_when_upstream_omits_its_stop(self):
+        # 上游开了 text 块却没发它的 content_block_stop 就直接进 message_delta/stop：
+        # 兜底关块必须在 message_stop 之前，绝不能跨 message 边界
+        src = "".join([
+            sse("content_block_start", {"type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""}}),
+            sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+            sse("message_stop", {"type": "message_stop"}),
+        ])
+        evs = self._run(src, 4096)
+        kinds = [e for e, _ in evs]
+        self.assertIn("content_block_stop", kinds)
+        self.assertIn("message_stop", kinds)
+        self.assertLess(kinds.index("content_block_stop"), kinds.index("message_stop"))
+
 
 if __name__ == "__main__":
     unittest.main()

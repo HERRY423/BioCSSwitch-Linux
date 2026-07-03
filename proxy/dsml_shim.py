@@ -350,10 +350,10 @@ class DsmlStreamRewriter:
         elif self.scan_buf:
             out.append(self._text_delta(self.scan_buf))     # 懒开
             self.scan_buf = ""
-            if self.cur_out is not None:
-                out.append(self._emit("content_block_stop",
-                          {"type": "content_block_stop", "index": self.cur_out}))
-                self.cur_out = None
+        if self.cur_out is not None:                        # 无条件关掉仍开的块，镜像 _on_block_stop
+            out.append(self._emit("content_block_stop",
+                      {"type": "content_block_stop", "index": self.cur_out}))
+            self.cur_out = None
         return b"".join(out)
 
     # ---- 合成辅助 ----
