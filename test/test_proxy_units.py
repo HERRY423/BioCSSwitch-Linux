@@ -66,5 +66,144 @@ class MaxTokensPerModel(unittest.TestCase):
         self.assertEqual(cs.clamp_max_tokens(100000, "qwen-max"), 8192)
 
 
+class RelayProvider(unittest.TestCase):
+    """中转站 provider：透传（不重映射）+ 贴合 + 双鉴权头 + 不夹 max_tokens + /v1/models 归一化。"""
+
+    def setUp(self):
+        cs.PROV = dict(cs.PROVIDERS["relay"])
+        cs.PROV["url"] = "https://relay.test/claude/v1/messages"
+        cs.PROV["models_url"] = "https://relay.test/claude/v1/models"
+        cs.KEY = "cr_testkey"
+        cs.RELAY_MODELS = []
+        cs.RELAY_FORCE_MODEL = None
+
+    def test_passthrough_keeps_model_name(self):
+        # 中转站原生认 claude-*，模型名原样透传（不走 model_map）。
+        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
+        self.assertEqual(cs.resolve_model("claude-sonnet-4-6"), "claude-sonnet-4-6")
+        self.assertEqual(cs.resolve_model("some-other-model"), "some-other-model")
+
+    def test_empty_model_falls_back_to_default(self):
+        self.assertEqual(cs.resolve_model(""), "claude-opus-4-8")
+
+    def test_snaps_bare_id_to_upstream_dated_id(self):
+        cs.RELAY_MODELS = ["claude-haiku-4-5-20251001", "claude-opus-4-8"]
+        # 裸 id（如标题 agent 的）贴合到中转站带日期的真实 id。
+        self.assertEqual(cs.resolve_model("claude-haiku-4-5"), "claude-haiku-4-5-20251001")
+        # 精确命中不改。
+        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
+        # 缓存里没有的原样透传（交中转站处理别名/报错）。
+        self.assertEqual(cs.resolve_model("claude-sonnet-5"), "claude-sonnet-5")
+
+    def test_force_model_overrides_everything(self):
+        # 选了模型：无论 Science 发什么（含裸 claude-*、空名），都强制成选中的上游模型。
+        cs.RELAY_FORCE_MODEL = "mimo-v2.5-pro"
+        try:
+            self.assertEqual(cs.resolve_model("claude-opus-4-8"), "mimo-v2.5-pro")
+            self.assertEqual(cs.resolve_model("claude-haiku-4-5"), "mimo-v2.5-pro")
+            self.assertEqual(cs.resolve_model(""), "mimo-v2.5-pro")
+        finally:
+            cs.RELAY_FORCE_MODEL = None
+
+    def test_no_force_model_keeps_passthrough(self):
+        # 留空：维持 PR #4 透传（贴合到真实 id / 原样）。
+        cs.RELAY_FORCE_MODEL = None
+        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
+        self.assertEqual(cs.resolve_model(""), "claude-opus-4-8")  # 空名兜底 default_model
+
+    def test_auth_headers_both(self):
+        h = cs._upstream_auth_headers()
+        self.assertEqual(h.get("x-api-key"), "cr_testkey")
+        self.assertEqual(h.get("Authorization"), "Bearer cr_testkey")
+
+    def test_deepseek_auth_headers_default_xapikey(self):
+        # 回归：deepseek 未设 auth_style → 仍只带 x-api-key（不误引入 Bearer）。
+        cs.PROV = cs.PROVIDERS["deepseek"]
+        cs.KEY = "sk-ds"
+        self.assertEqual(cs._upstream_auth_headers(), {"x-api-key": "sk-ds"})
+
+    def test_no_max_tokens_clamp(self):
+        # relay default_cap=None、model_caps 空 → 尊重中转站真实上限，不夹取。
+        self.assertEqual(cs.clamp_max_tokens(1000000, "claude-opus-4-8"), 1000000)
+
+    def test_models_normalized_and_cache_refreshed(self):
+        # 用假 http_get_json 复刻中转站 OpenAI 风格返回，验证归一化成 Anthropic 格式
+        # + RELAY_MODELS 缓存刷新（离线，不触网）。
+        orig = cs.http_get_json
+        cs.http_get_json = lambda url, headers: {
+            "data": [
+                {"id": "claude-opus-4-8", "object": "model"},
+                {"id": "claude-3-5-sonnet-20241022", "object": "model"},
+                {"no_id": True},  # 缺 id 的条目应被跳过
+            ]
+        }
+        try:
+            out = cs.fetch_relay_models()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual([m["id"] for m in out], ["claude-opus-4-8", "claude-3-5-sonnet-20241022"])
+        self.assertTrue(all(m["type"] == "model" for m in out))
+        self.assertEqual(out[0]["display_name"], "claude-opus-4-8")
+        self.assertEqual(cs.RELAY_MODELS, ["claude-opus-4-8", "claude-3-5-sonnet-20241022"])
+
+    def test_models_carry_supports_tools_from_supported_parameters(self):
+        orig = cs.http_get_json
+        cs.http_get_json = lambda url, headers: {"data": [
+            {"id": "glm-4.6", "supported_parameters": ["tools", "temperature"]},  # 含 tools → True
+            {"id": "glm-lite", "supported_parameters": ["temperature"]},          # 有字段无 tools → False
+            {"id": "glm-x"},                                                        # 无字段 → None（不臆测）
+        ]}
+        try:
+            out = cs.fetch_relay_models()
+        finally:
+            cs.http_get_json = orig
+        got = {m["id"]: m["supports_tools"] for m in out}
+        self.assertEqual(got, {"glm-4.6": True, "glm-lite": False, "glm-x": None})
+
+    def test_build_models_response_success(self):
+        orig = cs.http_get_json
+        cs.http_get_json = lambda url, headers: {"data": [{"id": "glm-4.6"}]}
+        try:
+            code, body = cs.build_models_response()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual(code, 200)
+        self.assertEqual([m["id"] for m in body["data"]], ["glm-4.6"])
+
+    def test_build_models_response_preserves_upstream_status(self):
+        import urllib.error, io
+        def boom(url, headers):
+            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(b"nope"))
+        orig = cs.http_get_json
+        cs.http_get_json = boom
+        try:
+            code, body = cs.build_models_response()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual(code, 401)                    # 不再吞成 200 + 静态
+        self.assertEqual(body["upstream_status"], 401)
+        self.assertNotIn("data", body)                 # 失败不回静态列表
+
+    def test_build_models_response_network_error_502(self):
+        def boom(url, headers):
+            raise ConnectionError("dns fail")
+        orig = cs.http_get_json
+        cs.http_get_json = boom
+        try:
+            code, body = cs.build_models_response()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual(code, 502)
+        self.assertEqual(body["error_kind"], "network")
+
+    def test_build_models_response_non_relay_returns_static(self):
+        # deepseek/qwen（无 models_url）→ 仍回静态选择器列表，行为不变。
+        cs.PROV = cs.PROVIDERS["deepseek"]
+        code, body = cs.build_models_response()
+        self.assertEqual(code, 200)
+        ids = [m["id"] for m in body["data"]]
+        self.assertIn("claude-opus-4-8", ids)
+
+
 if __name__ == "__main__":
     unittest.main()

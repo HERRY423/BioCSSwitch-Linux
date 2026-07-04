@@ -4,6 +4,31 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.3.0-beta.2] — 2026-07-04
+
+> 主题：**大预览版（Big Preview）**。一次把三块尚未进正式版的功能合在一起供实机试用：① cc-switch 式**多 profile 配置管理** + **中转站 relay provider**；② DeepSeek 工具调用泄漏**兜底 shim**（默认 `off`）。
+>
+> **⚠️ 这是预览/测试版（prerelease），不是稳定版。** 稳定版仍是 **v0.2.1**。多 profile 与 relay 的真机行为仍待复测（见「说明」），DSML 默认关闭仅供显式验证。本版**取代并撤回**同日名不副实的 `v0.3.0-beta.1`（那版 CHANGELOG 只写了 DSML，却把桌面侧改动一并打包却未如实说明）。
+
+### 新增 Added
+- **多 profile 配置管理（cc-switch 式）**：把原来的「固定槽」（每家一份）升级为**用户自管的命名配置列表 + 当前生效指针**：同一家（如 GLM）可存多套、命名、增删、一键切换。切换是**事务式**的：先探活候选、健康才提交、失败回滚、全程不停沙箱。内置 7 家 provider 模板。配置继续用 **JSON** 存储并硬化（原子写 + schema 版本字段 + 覆盖前留 `.bak`），SQLite 缓议。
+- **中转站 relay provider**：只需填 `base_url` + `token` 即可接**任意 Anthropic 兼容中转站**；`/v1/models` 回源自动把该站真实模型铺进选择器；双鉴权头兼容各家。
+- **DSML 兜底 shim（默认 `off`）**：DeepSeek 偶发把工具调用泄漏成纯文本 DSML 标记（`<｜｜DSML｜｜tool_calls>…`），Science 当普通文本、工具无回执 → **卡死**（issue #8）。shim 端到端接进 `_handle_anthropic`，由环境变量 `CSSWITCH_TOOLUSE_SHIM` 选模式：`off`（默认、字节透传、零回归）/ `detect`（透传 + 遥测）/ `rewrite`（把泄漏还原成真正的 `tool_use`）。新增 `test/test_proxy_dsml_e2e.py` 端到端证明。
+
+### 修复 Fixed
+- **（多 profile）无效 native key 被误报「已切到」**：`deepseek`/`qwen` 等 native adapter 此前跳过上游校验、只探本地 `/health`（恒回 200 不验 key），坏 key 会被提交为当前生效、UI 谎报成功、直到首个真实推理才 401。现 native 也走隔离探测打 `/v1/messages` 触上游，坏 key 拦下不提交、active 与旧代理不动。
+- **（多 profile）切换/编辑健壮性**：切换写盘失败回滚进程；停沙箱失败即返错且端口不变（不再谎称已重置）；非 active 连接编辑 truthful-save（只拦明确 4xx、其余据实标「未校验，激活再验」）；真机护栏拒软链 + `canonicalize` 拒落真实 HOME 内 + 写盘先删软链再写新文件；若干前端如实提示。
+- **（DSML）SSE 末帧丢失**：`_drain_frames` 的 `flush_tail` 形参此前未被使用，EOF 突然时吞掉 `message_stop`（实测 `b''`）。现 `finalize()` 补吐末帧。
+- **（DSML）非法布尔臆断成 `false`**：`_coerce_param` 此前把 `maybe` 之类都当 `False` 并过校验，可能合成参数错误的真实工具调用。现只认 `true/1/yes`、`false/0/no`，其余整块作废。
+- **（DSML）rewrite 非流式无泄漏时不逐字 + 遥测误报**（清洁 agent 实机验证发现）：`rewrite_nonstream_body` 此前无条件 `json.dumps` 再序列化，干净响应也被改字节且误报「已改写」。现无改动时原样返回原字节。
+
+### 说明 Notes
+- **⚠️ 多 profile / relay 仍待真机复测**：RM-04/06/13（非 active native 编辑即时校验、无效 native key 必被拦、端口占用报错措辞）代码 + 单测已覆盖，但**真机行为需在场实测确认**（铁律 4，Claude 不代登录）。这正是本版为 prerelease 的原因；请勿当稳定版依赖。
+- **DSML 默认关闭**：普通用户安装后 DSML 行为与 0.2.1 一致；`rewrite` 需 `CSSWITCH_TOOLUSE_SHIM=rewrite` 显式开启（`detect` 只统计不改写）。把 rewrite 设为默认留待其余闸门（如把合法 DSML 示例误判为调用的边界）关闭后的后续版本。
+- **铁律零回退**：全程只碰隔离沙箱，绝不触碰真实 `~/.claude-science` 与端口 8765；真机测试须用户在场、Claude 不代登录。
+- **验收闸门**：cargo test 113 / clippy -D warnings 0 / `run_all.sh` ALL GREEN / gitleaks 0。
+- **拔 node/python（治本）未在本版**：proxy 仍是 Python、伪造器仍是 Node，收敛到 Rust 单二进制仍在 roadmap。
+
 ## [0.2.1] — 2026-07-03
 
 > 主题：热修「开了 CSSwitch 仍被要求登录」。0.2.0 有两个会导致「流程走完仍落登录页」的缺陷，本版各修一个并各补一条离线回归测试。链路方案本身没坏（代理此前成功处理过真实聊天、虚拟 OAuth 结构自洽），坏的是「重开 / 取入口 URL」路径。
