@@ -1765,14 +1765,14 @@ fn run_doctor(app: tauri::AppHandle) -> Result<String, String> {
         None => (String::new(), "", false),
     };
     let mut cmd = Command::new("bash");
+    // 多 profile：传 template_id + adapter + key 有无（布尔）。doctor 不再按 provider 名写死、
+    // 不再去 shell 环境找 key（key 存 config.json）。绝不把真实 key 值传进其环境。
     cmd.arg(&doctor)
         .env("CSSWITCH_PROVIDER", &provider_label)
+        .env("CSSWITCH_ADAPTER", adapter)
+        .env("CSSWITCH_KEY_PRESENT", if has_key { "1" } else { "0" })
         .env("CSSWITCH_PROXY_PORT", cfg.proxy_port.to_string())
         .env("CSSWITCH_SANDBOX_PORT", cfg.sandbox_port.to_string());
-    // doctor 只做 -n 判空来报 key 有无。只让它知道「存在」，绝不把真实 key 传进其环境。
-    if has_key {
-        cmd.env(key_env_for_adapter(adapter), "***present***");
-    }
     let out = cmd.output().map_err(|e| e.to_string())?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr);
