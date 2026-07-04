@@ -19,10 +19,10 @@ const invoke = PREVIEW
 // ── 预览兜底 mock（仅浏览器预览用；node --check 只验语法，真实 app 走真后端） ──
 const MOCK_TEMPLATES = [
   { id: "deepseek", name: "DeepSeek", category: "cn_official", api_format: "anthropic", adapter: "deepseek", base_url: "https://api.deepseek.com/anthropic", base_url_editable: false, requires_model_override: false, builtin_models: ["claude-opus-4-8", "claude-haiku-4-5"], icon: "deepseek", icon_color: "#1E88E5", website_url: "https://platform.deepseek.com" },
-  { id: "glm", name: "智谱 GLM", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://open.bigmodel.cn/api/anthropic", base_url_editable: false, requires_model_override: false, builtin_models: ["glm-4.6", "glm-5", "glm-4.5-air"], icon: "glm", icon_color: "#2E6BE6", website_url: "https://open.bigmodel.cn" },
-  { id: "xiaomi", name: "小米 MiMo", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://api.xiaomimimo.com/anthropic", base_url_editable: false, requires_model_override: true, builtin_models: ["mimo-v2.5-pro"], icon: "xiaomi", icon_color: "#FF6900", website_url: "https://xiaomimimo.com" },
-  { id: "siliconflow", name: "硅基流动", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://api.siliconflow.cn", base_url_editable: false, requires_model_override: true, builtin_models: ["deepseek-ai/DeepSeek-V3", "zai-org/GLM-5.2"], icon: "siliconflow", icon_color: "#7C3AED", website_url: "https://siliconflow.cn" },
-  { id: "openrouter", name: "OpenRouter", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "https://openrouter.ai/api", base_url_editable: false, requires_model_override: false, builtin_models: ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4.8-fast"], icon: "openrouter", icon_color: "#6467F2", website_url: "https://openrouter.ai" },
+  { id: "glm", name: "智谱 GLM", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://open.bigmodel.cn/api/anthropic", base_url_editable: true, requires_model_override: false, builtin_models: ["glm-4.6", "glm-5", "glm-4.5-air"], icon: "glm", icon_color: "#2E6BE6", website_url: "https://open.bigmodel.cn" },
+  { id: "xiaomi", name: "小米 MiMo", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://api.xiaomimimo.com/anthropic", base_url_editable: true, requires_model_override: true, builtin_models: ["mimo-v2.5-pro"], icon: "xiaomi", icon_color: "#FF6900", website_url: "https://xiaomimimo.com" },
+  { id: "siliconflow", name: "硅基流动", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://api.siliconflow.cn", base_url_editable: true, requires_model_override: true, builtin_models: ["deepseek-ai/DeepSeek-V3", "zai-org/GLM-5.2"], icon: "siliconflow", icon_color: "#7C3AED", website_url: "https://siliconflow.cn" },
+  { id: "openrouter", name: "OpenRouter", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "https://openrouter.ai/api", base_url_editable: true, requires_model_override: false, builtin_models: ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4.8-fast"], icon: "openrouter", icon_color: "#6467F2", website_url: "https://openrouter.ai" },
   { id: "qwen", name: "通义千问", category: "cn_official", api_format: "openai_chat", adapter: "qwen", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", base_url_editable: false, requires_model_override: false, builtin_models: ["qwen-max", "qwen-plus", "qwen-turbo"], icon: "qwen", icon_color: "#615CED", website_url: "https://dashscope.aliyun.com" },
   { id: "custom", name: "自定义", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "", base_url_editable: true, requires_model_override: true, builtin_models: [], icon: "custom", icon_color: "#6B7280", website_url: "" },
 ];
@@ -135,7 +135,8 @@ function modelCapability(t) {
 // （OpenRouter 的 category 是 custom，但地址只读、模型可跟随；只看 category 会误导）。
 function sourceHint(t) {
   if (!t) return "选择来源后按提示填写。";
-  if (t.base_url_editable) return "自定义端点：填地址与 key，用「获取模型」列出并选一个。";
+  // 真·自定义（可编辑且无预设地址）才叫「自定义端点」；预设虽可编辑但有官方默认，另行描述。
+  if (t.base_url_editable && !t.base_url) return "自定义端点：填地址与 key，用「获取模型」列出并选一个。";
   const cap = modelCapability(t);
   if (cap === CAP.NATIVE) {
     // deepseek 是原生 Anthropic 透传；qwen 经代理做 Anthropic↔OpenAI 转换，别都叫「直连」。
@@ -143,8 +144,10 @@ function sourceHint(t) {
       ? "官方端点（经代理转换协议）：填 API Key 即可，地址与模型都已内置。"
       : "官方原生端点（无需转换）：填 API Key 即可，地址与模型都已内置。";
   }
-  if (cap === CAP.FOLLOW) return "填 API Key 即可，地址已预设，模型默认跟随 Science。";
-  return "填 API Key 并选一个模型，地址已预设。";
+  // 预设地址可编辑：默认已填好官方地址，套餐/区域端点可改（如小米 token plan）。
+  const addr = t.base_url_editable ? "地址已预填官方默认（套餐 / 区域端点可改）" : "地址已预设";
+  if (cap === CAP.FOLLOW) return `填 API Key 即可，${addr}，模型默认跟随 Science。`;
+  return `填 API Key 并选一个模型，${addr}。`;
 }
 const MODEL_HINT = {
   native: "由 Science 选择器 + 内置映射自动选择（opus 深度 / haiku 快速）。",
@@ -480,10 +483,13 @@ function onWizTemplate() {
   // 把「新建不自动生效」放进顶部常驻提示（默认窗口下反馈区首屏可能在折叠线下，见 #6）。
   els.wizTplHint.textContent = sourceHint(t) + " 新建后需在列表点「设为当前」才生效。";
   if (t.base_url_editable) {
-    els.wizBase.value = "";
+    // 预设：预填官方默认地址（仍可改到套餐 / 区域端点）；真·自定义：留空 + 占位提示。
+    els.wizBase.value = t.base_url || "";
     els.wizBase.readOnly = false;
     els.wizBase.placeholder = "https://your-relay/claude";
-    els.wizBaseHint.textContent = "自定义端点根地址（自动补 /v1/messages 与 /v1/models）。";
+    els.wizBaseHint.textContent = t.base_url
+      ? "官方默认地址，可改到 token 套餐 / 区域端点（如小米 token plan）。"
+      : "自定义端点根地址（自动补 /v1/messages 与 /v1/models）。";
   } else {
     els.wizBase.value = t.base_url;
     els.wizBase.readOnly = true;
@@ -568,7 +574,9 @@ function openConn(id) {
   els.connBase.readOnly = !editable;
   // native（deepseek/qwen）隐藏「获取模型」按钮，别再提示一个不存在的操作（修 #5）。
   els.connBaseHint.textContent = editable
-    ? "自定义端点根地址。"
+    ? (t && t.base_url
+        ? "官方默认地址，可改到 token 套餐 / 区域端点。"
+        : "自定义端点根地址。")
     : (modelCapability(t) === CAP.NATIVE
         ? "模板地址（只读），模型由内置映射自动选择。"
         : "模板地址（只读）。填 key 后可「获取模型」。");

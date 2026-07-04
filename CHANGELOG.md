@@ -4,6 +4,17 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.3.1] — 2026-07-04
+
+> 主题：**内置预设支持自定义 base_url**。修用户反馈的小米 MiMo「token plan」401。
+
+### 修复 Fixed
+- **内置预设 `base_url` 只读，导致小米 MiMo「token plan」报 401**：小米 MiMo 的「token plan」套餐走独立域名 `token-plan-cn.xiaomimimo.com/anthropic`，与内置的 `api.xiaomimimo.com/anthropic` 不是同一 host；旧版预设地址锁死改不了，套餐 key 打到内置域名被上游 401。现将四家 relay 预设（智谱 GLM / 小米 MiMo / 硅基流动 / OpenRouter）的 `base_url` 改为**可编辑的默认值**：预填官方地址，允许改到 token 套餐 / 区域镜像 / 自建反代（新建向导与「编辑连接」两处都可改）。DeepSeek / 通义千问为原生 adapter（上游地址在代理内固定，运行时不吃自定义地址），保持只读以免「能填但不生效」的假象。「自定义」来源行为不变（空地址、可编辑）。
+
+### 说明 Notes
+- 纯前端 + 模板注册表改动，不改运行语义与鉴权。cargo test 114 全绿 / clippy 0 / fmt clean；前端预览实测（新建向导 + 编辑连接均可改、原生仍锁、自定义仍空、改到 token-plan 地址生效）。
+- 顺带修 `config.rs` 一处历史 fmt 漂移。
+
 ## [0.3.0] — 2026-07-04
 
 > 主题：**多 API 支持 + UI 改版**。从只支持 DeepSeek / 通义千问两家，扩展到 7 家 provider + 自定义端点的 cc-switch 式**多 profile 管理**；面板重做为配置列表 + chip 网格 + 三能力模型呈现。真机验收通过，正式毕业为**稳定版**（取代 v0.2.1 成为 Latest）。`0.3.0-beta.1/beta.2` 大预览版的内容在此定稿。

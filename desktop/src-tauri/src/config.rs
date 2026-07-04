@@ -925,6 +925,9 @@ mod tests {
         let full = "sk-secret-tail9999";
         assert!(!mask(full).contains("secret"));
         // 定长：掩码总长恒为 8（4 点 + 末4），不随 key 长度变长、不泄漏长度
-        assert_eq!(mask("sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaa1234").chars().count(), 8);
+        assert_eq!(
+            mask("sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaa1234").chars().count(),
+            8
+        );
     }
 }

@@ -66,7 +66,7 @@ static TEMPLATES: &[Template] = &[
         api_format: "anthropic",
         adapter: "relay",
         base_url: "https://open.bigmodel.cn/api/anthropic",
-        base_url_editable: false,
+        base_url_editable: true,
         requires_model_override: false,
         builtin_models: &["glm-4.6", "glm-5", "glm-4.5-air"],
         website_url: "https://open.bigmodel.cn",
@@ -80,7 +80,7 @@ static TEMPLATES: &[Template] = &[
         api_format: "anthropic",
         adapter: "relay",
         base_url: "https://api.xiaomimimo.com/anthropic",
-        base_url_editable: false,
+        base_url_editable: true,
         requires_model_override: true,
         builtin_models: &["mimo-v2.5-pro"],
         website_url: "https://xiaomimimo.com",
@@ -94,7 +94,7 @@ static TEMPLATES: &[Template] = &[
         api_format: "anthropic",
         adapter: "relay",
         base_url: "https://api.siliconflow.cn",
-        base_url_editable: false,
+        base_url_editable: true,
         requires_model_override: true,
         builtin_models: &["deepseek-ai/DeepSeek-V3", "zai-org/GLM-5.2"],
         website_url: "https://siliconflow.cn",
@@ -108,7 +108,7 @@ static TEMPLATES: &[Template] = &[
         api_format: "anthropic",
         adapter: "relay",
         base_url: "https://openrouter.ai/api",
-        base_url_editable: false,
+        base_url_editable: true,
         requires_model_override: false,
         builtin_models: &[
             "anthropic/claude-sonnet-5",
@@ -260,6 +260,27 @@ mod tests {
         let c = by_id("custom").unwrap();
         assert_eq!(c.base_url, "");
         assert!(c.base_url_editable);
+    }
+
+    #[test]
+    fn base_url_editable_matrix() {
+        // relay 家族预设：地址可编辑（预填官方默认，允许改到 token 套餐 / 区域端点）。
+        // 源自用户反馈：小米 MiMo token plan 走 token-plan-cn.xiaomimimo.com/anthropic，
+        // 与内置 api.xiaomimimo.com 不同 host，锁死地址 → 上游 401。
+        for id in ["glm", "xiaomi", "siliconflow", "openrouter", "custom"] {
+            assert!(
+                by_id(id).unwrap().base_url_editable,
+                "{id} 的 base_url 应可编辑"
+            );
+        }
+        // native adapter（deepseek/qwen）上游 URL 在 python 代理里硬编码，运行时不吃自定义
+        // base_url，故保持只读，避免「能填但不生效」的假象。
+        for id in ["deepseek", "qwen"] {
+            assert!(
+                !by_id(id).unwrap().base_url_editable,
+                "{id} 是原生 adapter，base_url 应只读"
+            );
+        }
     }
 
     fn slot(base_url: &str) -> ProviderCfgV1 {
