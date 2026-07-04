@@ -170,6 +170,7 @@ function showView(v) {
   els.wizSec.hidden = v !== "wizard";
   els.connSec.hidden = v !== "conn";
   els.metaSec.hidden = v !== "meta";
+  els.panel.classList.toggle("view-form", v !== "list");
   if (v === "list") hideSkip();
 }
 function cancelForm() { showView("list"); setMsg("就绪。"); }
@@ -271,7 +272,7 @@ async function switchMode(m) {
   }
   applyMode(m);
   setBusy(false);
-  if (mode === "proxy") showView("list");
+  showView("list");
   setMsg(
     mode === "official"
       ? "已切到官方模式：第三方代理/沙箱已停，点上方按钮打开你真实的 Claude Science。"

@@ -107,3 +107,6 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .abtn:active{transform:translateY(1px)}
 .abtn.prim{background:var(--accent);color:#fff;border-color:var(--accent)}
 .abtn.danger:hover{border-color:var(--red);color:var(--red)}
+/* 表单视图（向导/连接/改名）隐藏运行控制区与页脚；反馈消息区 .feedback 始终可见（P1-3）。 */
+.panel.view-form .list-only{display:none}
+.feedback{border-top:1px solid var(--line)}
