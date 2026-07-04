@@ -4,6 +4,31 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.3.0] — 2026-07-04
+
+> 主题：**多 API 支持 + UI 改版**。从只支持 DeepSeek / 通义千问两家，扩展到 7 家 provider + 自定义端点的 cc-switch 式**多 profile 管理**；面板重做为配置列表 + chip 网格 + 三能力模型呈现。真机验收通过，正式毕业为**稳定版**（取代 v0.2.1 成为 Latest）。`0.3.0-beta.1/beta.2` 大预览版的内容在此定稿。
+
+### 新增 Added
+- **多 API / 多 provider 支持**：内置 7 家模板（DeepSeek、通义千问、智谱 GLM、OpenRouter、小米 MiMo、硅基流动）+ **自定义 OpenAI / Anthropic 兼容端点**（自填 `base_url` / 模型 / Key）。
+- **cc-switch 式多 profile 配置管理**：把「固定槽」升级为用户自管的命名配置列表 + 当前生效指针；同一家可存多套、命名、增删、一键切换。切换是**事务式**的（先探活候选、健康才提交、失败回滚、全程不停沙箱）。配置用 JSON 存储并硬化（原子写 + schema 版本 + 覆盖前留 `.bak`），v1→v2 迁移不丢数据。
+- **中转站 relay provider**：填 `base_url` + `token` 即可接任意 Anthropic 兼容中转站；`/v1/models` 回源自动铺该站真实模型到选择器。
+- **DSML 工具调用兜底 shim（默认 `off`）**：DeepSeek 偶发把工具调用泄漏成纯文本 DSML 标记致 Science 卡死（issue #8）；由环境变量 `CSSWITCH_TOOLUSE_SHIM` 选 `off`（默认字节透传）/ `detect`（透传 + 遥测）/ `rewrite`（还原成真正的 `tool_use`）。
+
+### 变更 Changed
+- **面板 UI 改版**：重做为 profile 配置列表；来源选择改 **chip 网格**（键盘可达 / `aria-pressed`）；模型字段按**三能力**呈现（native 内置映射 / relay 跟随 Science / relay 固定）；新建 / 编辑走独立视图（隐藏运行区、保留反馈区）；文案瘦身 + a11y（label 关联 / `:focus-visible`）。折入四轮外审反馈。
+- **反馈栏空闲不占位**：去掉常驻「就绪。」，只有真实反馈（错误 / 结果 / 自检输出）时才显示。
+
+### 修复 Fixed
+- **配置列表长 key 掩码横向溢出**：掩码原来一个字符一个圆点，长 key 在 WKWebView 里不换行、撑出横向滚动条、裁掉行与按钮。改为**定长** `••••` + 末 4 位（任何长度都短、不泄漏 key 长度）。
+- **自检（doctor）对非 deepseek/qwen 来源误报**：`doctor.sh` 停留在单 provider 时代、按 provider 名写死并去 shell 环境找 key，导致 glm/xiaomi 等生效时误报「未知 provider」。改为多 profile 感知（据 adapter + key 有无报告，key 存 `config.json`）。
+- 承接 beta.1/beta.2 的多 profile / DSML 修复（无效 native key 拦截、切换回滚健壮性、SSE 末帧、布尔校验、rewrite 无泄漏不逐字等，详见下方 beta 条目）。
+
+### 说明 Notes
+- **真机验收已完成**：多 profile / relay 的真机行为经用户在场实测确认（beta 阶段的 RM 待办已消解）；DSML 仍默认 `off`，`rewrite` 需显式开启。
+- **铁律零回退**：全程只碰隔离沙箱，绝不触碰真实 `~/.claude-science` 与端口 8765；真机测试由用户在场完成、Claude 不代登录。
+- **验收闸门**：cargo test 113 全绿 / node / bash 语法通过。
+- **拔 node / python（治本）仍在 roadmap**：app 运行时零 node（虚拟登录 Rust 原生，v0.1.4 起）；翻译代理仍 Python，收敛到 Rust 单二进制待后续。
+
 ## [0.3.0-beta.2] — 2026-07-04
 
 > 主题：**大预览版（Big Preview）**。一次把三块尚未进正式版的功能合在一起供实机试用：① cc-switch 式**多 profile 配置管理** + **中转站 relay provider**；② DeepSeek 工具调用泄漏**兜底 shim**（默认 `off`）。
