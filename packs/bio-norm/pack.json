@@ -1,0 +1,17 @@
+{
+  "id": "bio-norm",
+  "name": "实体标准化 / 消歧",
+  "description": "把口头/文献里的实体名映射到规范 ID：HGNC（基因/蛋白）、MeSH（医学主题）、MONDO / DOID（疾病）、HPO（表型）、GO（通路/功能）、ChEBI（化学）、RxNorm（药物）。含缩写消歧工具，判断『APC』是 APC 基因、抗原提呈细胞、还是别的。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "optional_env": [
+    {"name": "NCBI_API_KEY", "label": "NCBI API Key（可选，MeSH 检索用 E-utilities）"}
+  ],
+  "servers": [
+    {"name": "bio-norm-hgnc",     "script": "packs/bio-norm/hgnc_server.py"},
+    {"name": "bio-norm-ols",      "script": "packs/bio-norm/ols_server.py"},
+    {"name": "bio-norm-mesh",     "script": "packs/bio-norm/mesh_server.py",
+     "env_pass": ["NCBI_API_KEY", "NCBI_EMAIL"]},
+    {"name": "bio-norm-disambig", "script": "packs/bio-norm/disambiguate_server.py"}
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "bio-lit",
+  "name": "生物医学文献检索",
+  "description": "PubMed / Europe PMC / Crossref / bioRxiv / medRxiv 的本地 MCP 检索工具。所有源都是公开免鉴权，NCBI E-utilities 可选填 API key 提高配额。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "optional_env": [
+    {
+      "name": "NCBI_API_KEY",
+      "label": "NCBI API Key（可选，提高 E-utilities 配额）",
+      "url": "https://www.ncbi.nlm.nih.gov/account/settings/"
+    },
+    {
+      "name": "NCBI_EMAIL",
+      "label": "NCBI 联系邮箱（可选）"
+    }
+  ],
+  "servers": [
+    {
+      "name": "bio-lit-pubmed",
+      "script": "packs/bio-lit/pubmed_server.py",
+      "env_pass": ["NCBI_API_KEY", "NCBI_EMAIL"]
+    },
+    {
+      "name": "bio-lit-europepmc",
+      "script": "packs/bio-lit/europepmc_server.py"
+    },
+    {
+      "name": "bio-lit-crossref",
+      "script": "packs/bio-lit/crossref_server.py",
+      "env_pass": ["CROSSREF_MAILTO"]
+    },
+    {
+      "name": "bio-lit-preprint",
+      "script": "packs/bio-lit/preprint_server.py"
+    }
+  ]
+}

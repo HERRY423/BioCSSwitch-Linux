@@ -71,13 +71,36 @@ def start_dsml_upstream():
     srv.listen(5)
     port = srv.getsockname()[1]
 
+    def read_request(c):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = c.recv(65536)
+            if not chunk:
+                return data
+            data += chunk
+        head, sep, body = data.partition(b"\r\n\r\n")
+        content_length = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    content_length = int(line.split(b":", 1)[1].strip())
+                except ValueError:
+                    content_length = 0
+                break
+        while len(body) < content_length:
+            chunk = c.recv(65536)
+            if not chunk:
+                break
+            body += chunk
+        return head + sep + body
+
     def serve():
         while True:
             try:
                 c, _ = srv.accept()
             except OSError:
                 return
-            req = c.recv(65536)
+            req = read_request(c)
             is_stream = b'"stream": true' in req or b'"stream":true' in req
             if is_stream:
                 sse = _build_sse()

@@ -1,0 +1,10 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "POST",
+    "canonical_url": "https://api.platform.opentargets.org/api/v4/graphql",
+    "params_redacted": {},
+    "body_sha1": "a02c2c2e6d307933bbd183ff3a48e60a34f9c1c0"
+  },
+  "response_body": "{\"data\": {\"target\": {\"id\": \"ENSG00000146648\", \"approvedSymbol\": \"EGFR\", \"approvedName\": \"epidermal growth factor receptor\", \"tractability\": [{\"modality\": \"SM\", \"label\": \"Approved Drug\", \"value\": true}, {\"modality\": \"SM\", \"label\": \"Structure with Ligand\", \"value\": true}, {\"modality\": \"AB\", \"label\": \"Approved Drug\", \"value\": true}], \"knownDrugs\": {\"count\": 320, \"uniqueDrugs\": 45, \"uniqueTargets\": 1, \"rows\": []}}}}"
+}

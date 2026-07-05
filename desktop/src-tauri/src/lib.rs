@@ -14,10 +14,13 @@
 mod config;
 mod config_legacy;
 mod lifecycle;
+mod netcanon;
 mod oauth_forge;
+mod packs;
 mod proc;
 mod scratch;
 mod templates;
+mod verification;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -733,6 +736,14 @@ fn set_mode(
             st.secret.clear();
             st.provider.clear();
             st.key_fp = 0;
+            drop(st);
+            // 拆本项目管理的 bio-* MCP：官方模式下用户走真实 Science，我们不留印记。
+            if let Some(root) = asset_root(&app) {
+                let sbx_data = sandbox_home().join(".claude-science");
+                if sbx_data.is_dir() {
+                    let _ = packs::purge_bio_from_mcp(&root, &sbx_data);
+                }
+            }
         }
         config::update(&dir, {
             let mode = mode.clone();
@@ -1510,6 +1521,10 @@ fn one_click_login_inner(
     state: State<'_, Mutex<AppState>>,
     lifecycle: &lifecycle::Lifecycle,
 ) -> Result<serde_json::Value, String> {
+    // 0. 敏感 / 合规模式门（早退）：拒绝把 key 写进 MCP env 之前先拦。
+    let cfg_pre = config::load_from(&config::default_dir()).map_err(|e| e.to_string())?;
+    assert_sensitive_ok(&cfg_pre)?;
+
     // 1~3. 确保代理在跑且健康（内部已查生效 profile、key、探活）。带回本次是复用还是重启。
     let (pport, secret, proxy_action) = ensure_proxy(&app, &state, lifecycle)?;
 
@@ -1553,6 +1568,14 @@ fn one_click_login_inner(
         oauth_forge::ensure_virtual_login(&auth_dir, "virtual@localhost.invalid", &sbx_home)
             .map_err(|e| format!("写虚拟登录失败：{e}"))?;
 
+    // 3b. 把当前启用的 pack 装配进沙箱：Science 只在启动时读 mcp-servers.json，
+    // 所以必须在 launch 之前落好文件。空启用集合也跑一次，把上次遗留的 bio-* 条目清掉。
+    let pack_warnings: Vec<String> = {
+        packs::apply(&root, &auth_dir, &cfg_pre.enabled_packs, &cfg_pre.pack_env)
+            .map(|(_a, w)| w)
+            .unwrap_or_else(|e| vec![format!("pack 装配失败：{e}")])
+    };
+
     let launch = root.join("scripts/launch-virtual-sandbox.sh");
     if !launch.is_file() {
         return Err("找不到 scripts/launch-virtual-sandbox.sh。".into());
@@ -1573,6 +1596,9 @@ fn one_click_login_inner(
             forged.org_uuid,
             forged.enc_file.display()
         );
+        for w in &pack_warnings {
+            let _ = writeln!(lw, "[packs] warning: {}", w);
+        }
     }
     let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
     let status = Command::new("zsh")
@@ -1825,6 +1851,681 @@ fn quit_app(app: tauri::AppHandle, state: State<'_, Mutex<AppState>>) -> Result<
     Ok(())
 }
 
+// ---------- 科研工具包 / 敏感模式 / 任务路由（bio-* 扩展）----------
+
+/// 敏感模式门：拒绝把请求发给不在白名单里的 upstream。
+/// 判断标准：`upstream_host(adapter, base_url)` 全小写命中白名单任一项。
+fn assert_sensitive_ok(cfg: &config::Config) -> Result<(), String> {
+    if !cfg.sensitive_mode {
+        return Ok(());
+    }
+    let (adapter, base_url) = match cfg.active_profile() {
+        Some(p) => (
+            templates::adapter_for(&p.template_id).to_string(),
+            p.base_url.clone(),
+        ),
+        None => return Err("敏感模式已开启，但无生效 profile。请先选一个受信端点。".into()),
+    };
+    // 规范化当前 upstream host（与白名单存的形式一致：去 scheme/port、小写、IDNA）。
+    let raw_host = upstream_host(&adapter, &base_url);
+    let host = netcanon::canonicalize_host(&raw_host).unwrap_or_else(|_| raw_host.to_lowercase());
+    // 白名单里存的已是规范化 host；两边都规范化后精确比对。
+    let ok = cfg.local_endpoint_hosts.iter().any(|h| {
+        netcanon::canonicalize_host(h)
+            .map(|c| c == host)
+            .unwrap_or(false)
+    });
+    if ok {
+        return Ok(());
+    }
+    let hint = if cfg.local_endpoint_hosts.is_empty() {
+        "（白名单为空）".to_string()
+    } else {
+        format!("（白名单：{}）", cfg.local_endpoint_hosts.join(", "))
+    };
+    Err(format!(
+        "敏感模式：拒绝把请求发到 `{host}`（未在受信端点白名单里）{hint}。\n\
+         请把机构自建端点 host 加进白名单，或关闭敏感模式。真实实例 8765 未受影响。",
+        host = host,
+        hint = hint
+    ))
+}
+
+#[tauri::command]
+fn list_packs(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let root = asset_root(&app).ok_or("找不到 packs/ 资源根")?;
+    let all = packs::list_packs(&root);
+    let cfg = config::load_from(&config::default_dir()).unwrap_or_default();
+    let mut env_masked = serde_json::Map::new();
+    for (k, v) in &cfg.pack_env {
+        env_masked.insert(k.clone(), serde_json::Value::Bool(!v.is_empty()));
+    }
+    let current_upstream = cfg
+        .active_profile()
+        .map(|p| upstream_host(&templates::adapter_for(&p.template_id), &p.base_url))
+        .unwrap_or_default();
+    Ok(json!({
+        "packs": all,
+        "enabled": cfg.enabled_packs,
+        "env_set": env_masked,
+        "mode": cfg.mode,
+        "sensitive_mode": cfg.sensitive_mode,
+        "local_endpoint_hosts": cfg.local_endpoint_hosts,
+        "current_upstream_host": current_upstream,
+        "verification": verification_summary(&cfg),
+    }))
+}
+
+#[tauri::command]
+fn toggle_pack(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    id: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let cfg = config::update(&dir, {
+        let id = id.clone();
+        move |c| {
+            c.enabled_packs.insert(id, enabled);
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    if cfg.mode == "official" {
+        return Ok(json!({
+            "ok": true, "applied": [], "warnings": [],
+            "note": "已保存；官方模式下 pack 不装配，切回第三方模式即可生效。",
+        }));
+    }
+    let (applied, warnings, sandbox_restarted) = reapply_packs(&app, &state, &cfg)?;
+    Ok(json!({
+        "ok": true, "applied": applied,
+        "warnings": warnings, "sandbox_restarted": sandbox_restarted,
+    }))
+}
+
+#[tauri::command]
+fn set_pack_env(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    name: String,
+    value: String,
+) -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let cfg = config::update(&dir, {
+        let (n, v) = (name.clone(), value.clone());
+        move |c| {
+            if v.is_empty() {
+                c.pack_env.remove(&n);
+            } else {
+                c.pack_env.insert(n, v);
+            }
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    if cfg.mode == "official" {
+        return Ok(json!({
+            "ok": true,
+            "set": !value.is_empty(),
+            "applied": [],
+            "warnings": [],
+            "note": "已保存；官方模式下 pack 不装配，切回第三方模式即可生效。",
+        }));
+    }
+    let (applied, warnings, sandbox_restarted) = reapply_packs(&app, &state, &cfg)
+        .map_err(|e| format!("pack 环境变量已保存，但重新装配失败：{e}"))?;
+    Ok(json!({
+        "ok": true,
+        "set": !value.is_empty(),
+        "applied": applied,
+        "warnings": warnings,
+        "sandbox_restarted": sandbox_restarted,
+    }))
+}
+
+/// 敏感 / 合规模式开关。开启后：白名单外的 upstream 一律拒绝起沙箱。
+#[tauri::command]
+fn set_sensitive_mode(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let cfg = config::update(&dir, move |c| {
+        c.sensitive_mode = enabled;
+    })
+    .map_err(|e| e.to_string())?;
+    let mut sandbox_stopped = false;
+    if enabled && assert_sensitive_ok(&cfg).is_err() && sandbox_running_ours(cfg.sandbox_port) {
+        let mut st = lock(&state);
+        let _ = stop_sandbox_inner(&app, &mut st);
+        sandbox_stopped = true;
+    }
+    let bio_privacy_on = cfg
+        .enabled_packs
+        .get("bio-privacy")
+        .copied()
+        .unwrap_or(false);
+    Ok(json!({
+        "ok": true, "sensitive_mode": enabled,
+        "sandbox_stopped": sandbox_stopped,
+        "suggest_enable_bio_privacy": enabled && !bio_privacy_on,
+    }))
+}
+
+/// 设置受信端点白名单。输入可以是 URL 或裸 host（带不带 port / scheme 都行）。
+///
+/// phase-5 加固：
+///   1. 每条经 `netcanon::canonicalize_host` 统一成 host（去 scheme/port/末尾点、小写、IDNA）。
+///   2. 分类：localhost / 私网 IP → 自动收；公网域名 → **只在 `confirm_public=true` 时收**
+///      （"用户明确确认的机构域名"）。
+///   3. denylist（公有大模型 API host，含子域）硬拒。
+///
+/// 返回 `{ok, hosts, needs_confirm, denied, invalid}`，让 UI 能提示用户逐条确认。
+#[tauri::command]
+fn set_local_endpoint_hosts(
+    hosts: Vec<String>,
+    confirm_public: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let confirm = confirm_public.unwrap_or(false);
+    let mut accepted: Vec<String> = Vec::new();
+    let mut needs_confirm: Vec<String> = Vec::new();
+    let mut denied: Vec<String> = Vec::new();
+    let mut invalid: Vec<String> = Vec::new();
+
+    for raw in &hosts {
+        match netcanon::vet_one(raw) {
+            netcanon::HostVerdict::AutoAccept(h) => accepted.push(h),
+            netcanon::HostVerdict::NeedsConfirm(h) => {
+                if confirm {
+                    accepted.push(h);
+                } else {
+                    needs_confirm.push(h);
+                }
+            }
+            netcanon::HostVerdict::Denied(h) => denied.push(h),
+            netcanon::HostVerdict::Invalid(_) => invalid.push(raw.clone()),
+        }
+    }
+    accepted.sort();
+    accepted.dedup();
+
+    // denylist 命中 → 直接失败（绝不静默丢弃，避免用户以为加成功了）。
+    if !denied.is_empty() {
+        return Err(format!(
+            "拒绝把公有 API host {} 加入白名单（这会绕过敏感模式）。",
+            denied.join(", ")
+        ));
+    }
+    // 有公网域名待确认且未确认 → 不落盘，回报让 UI 二次确认。
+    if !needs_confirm.is_empty() && !confirm {
+        return Ok(json!({
+            "ok": false,
+            "needs_confirm": needs_confirm,
+            "invalid": invalid,
+            "hint": "以下是公网域名，敏感模式默认只允许 localhost / 私网。确认这些是你机构的受控端点后，再带 confirm_public=true 保存。",
+        }));
+    }
+
+    let dir = config::default_dir();
+    let c2 = accepted.clone();
+    config::update(&dir, move |c| c.local_endpoint_hosts = c2).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "ok": true,
+        "hosts": accepted,
+        "invalid": invalid,
+    }))
+}
+
+/// 应用当前 config 的 pack 状态到沙箱，并在沙箱在跑时停沙箱让下次一键读到新配置。
+fn reapply_packs(
+    app: &tauri::AppHandle,
+    state: &State<'_, Mutex<AppState>>,
+    cfg: &config::Config,
+) -> Result<(Vec<String>, Vec<String>, bool), String> {
+    let root = asset_root(app).ok_or("找不到 packs/ 资源根")?;
+    let sbx_data = sandbox_home().join(".claude-science");
+    let (applied, warnings) = packs::apply(&root, &sbx_data, &cfg.enabled_packs, &cfg.pack_env)?;
+    let sport = cfg.sandbox_port;
+    let restarted = if sandbox_running_ours(sport) {
+        let mut st = lock(state);
+        let _ = stop_sandbox_inner(app, &mut st);
+        true
+    } else {
+        false
+    };
+    Ok((applied, warnings, restarted))
+}
+
+// ---------- 任务级模型路由（feature 1）----------
+
+/// 内置任务清单 → 前端。
+#[tauri::command]
+fn list_biomed_tasks() -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = packs::BIOMED_TASKS
+        .iter()
+        .map(|(id, label, hint)| json!({"id": id, "label": label, "hint": hint}))
+        .collect();
+    let cfg = config::load_from(&config::default_dir()).unwrap_or_default();
+    let mut probe_map = serde_json::Map::new();
+    for (k, v) in &cfg.probe_results {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(v) {
+            probe_map.insert(k.clone(), val);
+        }
+    }
+    json!({
+        "tasks": arr,
+        "routes": cfg.task_routes,
+        "active_id": cfg.active_id,
+        "probes": probe_map,
+    })
+}
+
+/// 设置某任务的默认 profile。profile_id 为空 → 走 active_id。
+#[tauri::command]
+fn set_task_route(task: String, profile_id: String) -> Result<(), String> {
+    // 校验 task
+    if !packs::BIOMED_TASKS.iter().any(|(id, _, _)| *id == task) {
+        return Err(format!("未知任务：{task}"));
+    }
+    let dir = config::default_dir();
+    // 校验 profile_id（空 = 清除）
+    if !profile_id.is_empty() {
+        let cfg = config::load_from(&dir).map_err(|e| e.to_string())?;
+        if cfg.profile_by_id(&profile_id).is_none() {
+            return Err(format!("未知 profile：{profile_id}"));
+        }
+    }
+    config::update(&dir, move |c| {
+        if profile_id.is_empty() {
+            c.task_routes.remove(&task);
+        } else {
+            c.task_routes.insert(task, profile_id);
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 探针类型（本项目在 v0.3 时代已明确工具调用 / 长上下文 / JSON 稳定性是三大风险）。
+#[derive(Deserialize)]
+struct RunProbeReq {
+    profile_id: String,
+    /// tool_use / long_ctx / json_stable —— 前端可任选一批
+    probes: Vec<String>,
+}
+
+/// 用代理起最小请求，评估三类能力。
+///   - tool_use  : 带 tools + tool_choice=tool，看是否回 tool_use block
+///   - long_ctx  : 32 KiB payload，看是否 200 / 400
+///   - json_stable: 要求严格 JSON schema，看输出是否可解析
+/// 结果写回 config.probe_results（key `<profile_id>:<probe>`）。
+///
+/// phase-2：**支持任意 profile**——active 走现有代理；非 active 走 `scratch::scratch_probe`
+/// 起临时代理，探完杀净（复用 v0.3 的 nonactive-probe 内核）。
+fn response_has_tool_use_block(body: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    v.get("content")
+        .and_then(|c| c.as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        })
+        .unwrap_or(false)
+}
+
+fn response_text_blocks(body: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return String::new();
+    };
+    v.get("content")
+        .and_then(|c| c.as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+fn response_has_probe_json(body: &str) -> bool {
+    let text = response_text_blocks(body);
+    let candidate = text.trim();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
+        return false;
+    };
+    v.get("pmid").and_then(|p| p.as_str()) == Some("12345678")
+        && v.get("year").and_then(|y| y.as_i64()) == Some(2024)
+}
+
+#[tauri::command]
+fn run_probes(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    req: RunProbeReq,
+) -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let cfg_snapshot = config::load_from(&dir).map_err(|e| e.to_string())?;
+    let profile = cfg_snapshot
+        .profile_by_id(&req.profile_id)
+        .cloned()
+        .ok_or_else(|| format!("未知 profile：{}", req.profile_id))?;
+    let is_active = cfg_snapshot.active_id == req.profile_id;
+
+    // Active：起主代理；Non-active：为每个 probe 起临时代理（复用 scratch）。
+    let (pport, secret, _action) = if is_active {
+        let lifecycle = app.state::<lifecycle::Lifecycle>();
+        ensure_proxy(&app, &state, &lifecycle)?
+    } else {
+        // 非 active 用 scratch 直接跑；不需要主代理。用一个假 (port, secret) 占位；下面
+        // 每个 probe 分支自己起临时代理。
+        (0u16, String::new(), ProxyAction::Reused)
+    };
+
+    let mut results = serde_json::Map::new();
+    for probe in &req.probes {
+        let (payload, verdict_fn): (&[u8], fn(u16, &str) -> (&'static str, &'static str)) =
+            match probe.as_str() {
+                "tool_use" => (
+                    br#"{"model":"claude-opus-4-8","max_tokens":256,"tools":[{"name":"echo","description":"echo back","input_schema":{"type":"object","properties":{"msg":{"type":"string"}},"required":["msg"]}}],"tool_choice":{"type":"tool","name":"echo"},"messages":[{"role":"user","content":"call echo with msg='ok'"}]}"# as &[u8],
+                    |code: u16, body: &str| -> (&'static str, &'static str) {
+                        if code != 200 { return ("fail", "上游未返回 200 / 拒绝工具调用"); }
+                        if response_has_tool_use_block(body) {
+                            ("ok", "返回了 tool_use block")
+                        } else {
+                            ("degraded", "200 但未见 tool_use；可能被降级为文本或 DSML 泄漏")
+                        }
+                    },
+                ),
+                "long_ctx" => {
+                    // 32k 字符（约 8k tokens）——比大部分小模型的 cap 高一档，验证是否被截或 400。
+                    static PAYLOAD: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+                    let bytes: &Vec<u8> = PAYLOAD.get_or_init(|| {
+                        let fill = "生物医学文献综述测试文本；".repeat(2000);
+                        format!(
+                            "{{\"model\":\"claude-opus-4-8\",\"max_tokens\":32,\"messages\":[{{\"role\":\"user\",\"content\":\"以下是长上下文测试：{fill}\\n请回复 OK。\"}}]}}"
+                        )
+                        .into_bytes()
+                    });
+                    (
+                        bytes.as_slice(),
+                        |code: u16, _body: &str| -> (&'static str, &'static str) {
+                            if code == 200 { ("ok", "长上下文承接正常") }
+                            else if code == 400 { ("fail", "上游拒绝长上下文（400，超 cap）") }
+                            else { ("degraded", "长上下文异常状态") }
+                        },
+                    )
+                }
+                "json_stable" => (
+                    br#"{"model":"claude-opus-4-8","max_tokens":128,"messages":[{"role":"user","content":"return ONLY compact JSON: {\"pmid\":\"12345678\",\"year\":2024}. no prose."}]}"# as &[u8],
+                    |code: u16, body: &str| -> (&'static str, &'static str) {
+                        if code != 200 { return ("fail", "上游未返回 200"); }
+                        // 简单启发：body 里是否含合法 JSON 对象
+                        if response_has_probe_json(body) {
+                            ("ok", "返回可解析 JSON 骨架")
+                        } else {
+                            ("degraded", "200 但输出偏散文；JSON 稳定性弱")
+                        }
+                    },
+                ),
+                _ => {
+                    results.insert(probe.clone(), json!({"verdict": "skip", "reason": "未知探针"}));
+                    continue;
+                }
+            };
+        let (code_opt, body) = if is_active {
+            proc::http_post_status_body(pport, Some(&secret), "/v1/messages", payload, 30_000)
+                .unwrap_or((None, String::new()))
+        } else {
+            // 非 active：起临时代理（scratch），发同样 payload；探完杀净。
+            let root = asset_root(&app).ok_or("找不到 proxy/csswitch_proxy.py")?;
+            let py = proc::find_exe("python3").ok_or("缺 python3")?;
+            let script = root.join("proxy/csswitch_proxy.py");
+            let adapter = templates::adapter_for(&profile.template_id);
+            let key_env = key_env_for_adapter(adapter);
+            let target = scratch::ScratchTarget {
+                provider: adapter,
+                key_env,
+                base_url: &profile.base_url,
+                key: &profile.api_key,
+                model: if profile.model.is_empty() { None } else { Some(profile.model.as_str()) },
+            };
+            let r = scratch::scratch_probe(
+                &py, &script, &target,
+                scratch::ProbeKind::CustomPost(payload.to_vec(), true),
+            );
+            (r.status, r.body)
+        };
+        let code = code_opt.unwrap_or(0);
+        let (verdict, reason) = verdict_fn(code, &body);
+        let now_ms = config::now_ms();
+        let entry = json!({
+            "verdict": verdict,
+            "reason": reason,
+            "upstream_status": code,
+            "ts": now_ms,
+        });
+        // 写回 config.probe_results
+        let key = format!("{}:{}", req.profile_id, probe);
+        let val = entry.to_string();
+        let _ = config::update(&dir, |c| {
+            c.probe_results.insert(key, val);
+        });
+        results.insert(probe.clone(), entry);
+    }
+    Ok(json!({"ok": true, "results": results}))
+}
+
+// ---------- phase-1 路径验证命令 ----------
+//
+// smoke test 流程：
+//   1) `start_smoke_verification` 把 canary MCP + Skill 写进沙箱、返回 marker。
+//      UI 提示用户："请手动重启沙箱（全部停止 → 一键开始），再回来点 poll。"
+//      我们**不代重启**，因为用户可能有正在进行的对话。
+//   2) `poll_smoke_verification` 读 `~/.csswitch/smoke/latest.json` 判断 marker 是否到位。
+//   3) `confirm_skill_verified` 让用户手动确认：在 Science 里发触发词，看到 canary-ok 就点。
+//   4) `cleanup_smoke_verification` 拆掉 canary，恢复干净状态。
+
+/// 取 Claude Science 版本（`<bin> --version` 首个 token）。二进制不在 → "unknown"。
+/// 用于 verification 环境指纹：Science 更新后版本变了 → 提示"验证结果可能过期"。
+fn science_version() -> String {
+    if !Path::new(SCIENCE_BIN).is_file() {
+        return "unknown".to_string();
+    }
+    match Command::new(SCIENCE_BIN).arg("--version").output() {
+        Ok(out) => {
+            let s = String::from_utf8_lossy(&out.stdout);
+            // 输出可能是 "claude-science 1.2.3" 或纯版本号；取含数字的首行首 token
+            for line in s.lines() {
+                let t = line.trim();
+                if t.chars().any(|c| c.is_ascii_digit()) {
+                    // 取最后一个 whitespace-token（一般是版本号）
+                    return t.split_whitespace().last().unwrap_or(t).to_string();
+                }
+            }
+            "unknown".to_string()
+        }
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+#[tauri::command]
+fn start_smoke_verification(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let root = asset_root(&app).ok_or("找不到 packs/ 资源根")?;
+    let sbx_data = sandbox_home().join(".claude-science");
+    let py = proc::find_exe("python3")
+        .ok_or("缺少 python3（canary MCP 需要）。")?
+        .to_string_lossy()
+        .to_string();
+    let marker = verification::prepare_smoke(
+        &root,
+        &sbx_data,
+        packs::MCP_CONFIG_REL,
+        packs::SKILLS_REL,
+        &py,
+    )?;
+    // 写回 config：pending 状态 + 环境指纹。指纹让"Science 更新后路径可能变"能被自动发现。
+    let dir = config::default_dir();
+    let m2 = marker.clone();
+    let now = config::now_ms();
+    let sci_ver = science_version();
+    let py2 = py.clone();
+    config::update(&dir, move |c| {
+        c.verification.insert("mcp_verdict".into(), "mcp_path_pending".into());
+        c.verification.insert("skill_verdict".into(), "unverified".into());
+        c.verification.insert("last_marker".into(), m2);
+        c.verification.insert("last_run_ms".into(), now.to_string());
+        c.verification
+            .insert("reason".into(), "canary 已写入，等待用户重启沙箱后 poll".into());
+        // ── 环境指纹 ──
+        c.verification.insert("science_version".into(), sci_ver);
+        c.verification
+            .insert("mcp_config_rel".into(), packs::MCP_CONFIG_REL.into());
+        c.verification.insert("skills_rel".into(), packs::SKILLS_REL.into());
+        c.verification.insert("python_path".into(), py2);
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "marker": marker,
+        "next_step": "请停沙箱（全部停止），再点一键开始重启，然后回本页点「检查 canary」。",
+    }))
+}
+
+#[tauri::command]
+fn poll_smoke_verification() -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let cfg = config::load_from(&dir).map_err(|e| e.to_string())?;
+    let marker = cfg
+        .verification
+        .get("last_marker")
+        .cloned()
+        .unwrap_or_default();
+    if marker.is_empty() {
+        return Err("尚未跑过 canary。请先点「开始验证」。".into());
+    }
+    let result = verification::poll_smoke(&marker);
+    let (verdict, reason) = match result {
+        Some(true) => (
+            "mcp_path_ok",
+            "canary MCP 已被 Science 启动 → mcp-servers.json 路径正确 ✓",
+        ),
+        Some(false) => (
+            "mcp_path_fail",
+            "找到 marker 文件但 marker 值是旧的。可能沙箱未重启，请先重启再试。",
+        ),
+        None => (
+            "mcp_path_fail",
+            "未见 marker 文件。可能：(a) 沙箱未重启 (b) Science 用了别的 MCP 配置路径 (c) python3 不在 PATH",
+        ),
+    };
+    let (v2, r2) = (verdict.to_string(), reason.to_string());
+    let passed = verdict == "mcp_path_ok";
+    let now = config::now_ms();
+    config::update(&dir, move |c| {
+        c.verification.insert("mcp_verdict".into(), v2);
+        c.verification.insert("reason".into(), r2);
+        if passed {
+            // 记通过时间 + 通过时的 Science 版本（指纹基线），供以后判过期。
+            c.verification.insert("mcp_pass_ms".into(), now.to_string());
+        } else {
+            c.verification
+                .insert("last_fail_reason".into(), reason.to_string());
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "verdict": verdict,
+        "reason": reason,
+        "marker": marker,
+    }))
+}
+
+#[tauri::command]
+fn confirm_skill_verified(user_confirmed: bool) -> Result<serde_json::Value, String> {
+    let dir = config::default_dir();
+    let (verdict, reason) = if user_confirmed {
+        ("skill_path_ok", "用户在 Science 里发触发词，看到 canary-ok → skills 路径正确 ✓")
+    } else {
+        ("skill_path_fail", "用户报告未看到 canary-ok。Skill 路径可能不对。")
+    };
+    let (v2, r2) = (verdict.to_string(), reason.to_string());
+    config::update(&dir, move |c| {
+        c.verification.insert("skill_verdict".into(), v2);
+        c.verification.insert("reason".into(), r2);
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(json!({"verdict": verdict, "reason": reason}))
+}
+
+#[tauri::command]
+fn cleanup_smoke_verification(app: tauri::AppHandle) -> Result<(), String> {
+    let sbx_data = sandbox_home().join(".claude-science");
+    verification::cleanup_smoke(&sbx_data, packs::MCP_CONFIG_REL, packs::SKILLS_REL)
+        .map_err(|e| e.to_string())?;
+    let _ = app;
+    Ok(())
+}
+
+/// 供 `list_packs` 附带回传：整体是否已通过验证（决定 pack chip 是否显示"实验中"）。
+/// phase-5：带回环境指纹 + **过期判断**。Science 版本 / MCP 路径常量 / skills 路径常量
+/// 任一与通过时不同 → `stale=true`，UI 提示"验证结果可能过期，请重跑"。
+fn verification_summary(cfg: &config::Config) -> serde_json::Value {
+    let v = &cfg.verification;
+    let get = |k: &str| v.get(k).cloned();
+    let mcp = get("mcp_verdict").unwrap_or_else(|| "unverified".into());
+    let skill = get("skill_verdict").unwrap_or_else(|| "unverified".into());
+    let verified = mcp == "mcp_path_ok" && skill == "skill_path_ok";
+
+    // 过期判定：只有已验证时才谈过期。比对通过时记录的指纹 vs 当前。
+    let stored_sci = get("science_version");
+    let stored_mcp_rel = get("mcp_config_rel");
+    let stored_skills_rel = get("skills_rel");
+    let cur_sci = science_version();
+    let mut stale_reasons: Vec<String> = Vec::new();
+    if verified {
+        if let Some(s) = &stored_sci {
+            // 通过时 Science 是 unknown（dev 机）就不谈版本过期，避免噪声。
+            if s != "unknown" && *s != cur_sci {
+                stale_reasons.push(format!("Science 版本变了（验证时 {s} → 现在 {cur_sci}）"));
+            }
+        }
+        if stored_mcp_rel.as_deref() != Some(packs::MCP_CONFIG_REL) {
+            stale_reasons.push("MCP 配置路径常量已变".into());
+        }
+        if stored_skills_rel.as_deref() != Some(packs::SKILLS_REL) {
+            stale_reasons.push("Skill 路径常量已变".into());
+        }
+    }
+    let stale = !stale_reasons.is_empty();
+
+    json!({
+        "mcp_verdict": mcp,
+        "skill_verdict": skill,
+        "reason": get("reason"),
+        "last_run_ms": get("last_run_ms").and_then(|s| s.parse::<i64>().ok()),
+        "is_experimental": !verified,
+        // ── 环境指纹（phase-5）──
+        "fingerprint": {
+            "science_version_at_pass": stored_sci,
+            "science_version_now": cur_sci,
+            "mcp_config_rel": stored_mcp_rel,
+            "skills_rel": stored_skills_rel,
+            "python_path": get("python_path"),
+            "marker": get("last_marker"),
+            "mcp_pass_ms": get("mcp_pass_ms").and_then(|s| s.parse::<i64>().ok()),
+            "last_fail_reason": get("last_fail_reason"),
+        },
+        "stale": stale,
+        "stale_reasons": stale_reasons,
+    })
+}
+
 // ---------- 入口 ----------
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1856,7 +2557,19 @@ pub fn run() {
             open_release_page,
             report_bug,
             open_logs,
-            quit_app
+            quit_app,
+            list_packs,
+            toggle_pack,
+            set_pack_env,
+            set_sensitive_mode,
+            set_local_endpoint_hosts,
+            list_biomed_tasks,
+            set_task_route,
+            run_probes,
+            start_smoke_verification,
+            poll_smoke_verification,
+            confirm_skill_verified,
+            cleanup_smoke_verification,
         ])
         .setup(|app| {
             // 正常桌面应用：进 Dock、走常规应用生命周期。窗口在 tauri.conf.json 里配了

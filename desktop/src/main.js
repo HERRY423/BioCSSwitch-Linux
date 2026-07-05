@@ -106,6 +106,66 @@ function mockInvoke(cmd, args) {
       return Promise.resolve("0.0.0-preview");
     case "run_doctor":
       return Promise.resolve("（预览模式：后端未运行，这里是占位文本）");
+    case "list_packs":
+      return Promise.resolve({
+        packs: [
+          { id: "bio-lit", name: "生物医学文献检索", description: "PubMed / Europe PMC / Crossref / bioRxiv / medRxiv", optional_env: [{ name: "NCBI_API_KEY", label: "NCBI API Key（可选）" }], requires_env: [] },
+          { id: "bio-audit", name: "证据链与引用审计", description: "PMID/DOI/NCT 校验 + 证据类型 + Skill 强制规范", optional_env: [], requires_env: [], depends_on: ["bio-lit"] },
+          { id: "bio-mcp-shim", name: "远程 MCP 本地替身", description: "让 Science 仍看到 pubmed / clinical-trials / chembl / biorxiv 同名 MCP，实际走本地", optional_env: [], requires_env: [] },
+          { id: "bio-norm", name: "实体标准化 / 消歧", description: "HGNC / MeSH / MONDO / HPO / GO / ChEBI + disambiguate", optional_env: [], requires_env: [] },
+          { id: "bio-privacy", name: "隐私 / 合规模式", description: "PHI 扫描 + 脱敏 + 审计日志 + Skill 强制", optional_env: [], requires_env: [] },
+          { id: "bio-workflows", name: "科研工作流模板 Skills", description: "综述 / 靶点 / GEO / 试验 / rebuttal / grant aims", optional_env: [], requires_env: [] },
+        ],
+        enabled: {}, env_set: {}, mode: "proxy",
+        sensitive_mode: false, local_endpoint_hosts: [], current_upstream_host: "api.deepseek.com",
+      });
+    case "toggle_pack":
+      return Promise.resolve({ ok: true, applied: [args.id], warnings: [], sandbox_restarted: false });
+    case "set_pack_env":
+      return Promise.resolve({ ok: true, set: !!(args && args.value) });
+    case "set_sensitive_mode":
+      return Promise.resolve({ ok: true, sensitive_mode: !!(args && args.enabled), sandbox_stopped: false, suggest_enable_bio_privacy: !!(args && args.enabled) });
+    case "set_local_endpoint_hosts": {
+      const hs = (args && args.hosts) || [];
+      const pub = hs.filter((h) => !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h));
+      if (pub.length && !(args && args.confirmPublic)) {
+        return Promise.resolve({ ok: false, needs_confirm: pub, invalid: [],
+          hint: "（预览）公网域名需确认" });
+      }
+      return Promise.resolve({ ok: true, hosts: hs, invalid: [] });
+    }
+    case "list_biomed_tasks":
+      return Promise.resolve({
+        tasks: [
+          { id: "lit-review", label: "文献综述", hint: "长上下文优先" },
+          { id: "clinical-trials", label: "临床试验检索", hint: "工具调用密集" },
+          { id: "target-discovery", label: "靶点发现 / 老药新用", hint: "多源组合查询" },
+          { id: "tool-heavy", label: "工具调用密集任务", hint: "tool_use 稳定性优先" },
+          { id: "evidence-check", label: "引用 / 证据审计", hint: "JSON 稳定性优先" },
+        ],
+        routes: {}, active_id: mockStore.active_id, probes: {},
+      });
+    case "set_task_route":
+      return Promise.resolve(null);
+    case "run_probes":
+      return Promise.resolve({
+        ok: true,
+        results: {
+          tool_use: { verdict: "ok", reason: "（预览）", upstream_status: 200 },
+          long_ctx: { verdict: "ok", reason: "（预览）", upstream_status: 200 },
+          json_stable: { verdict: "degraded", reason: "（预览）", upstream_status: 200 },
+        },
+      });
+    case "start_smoke_verification":
+      return Promise.resolve({ marker: "0123abcd" + Math.random().toString(16).slice(2, 10),
+        next_step: "（预览）请重启沙箱后点检查" });
+    case "poll_smoke_verification":
+      return Promise.resolve({ verdict: "mcp_path_pending", reason: "（预览）尚未跑真实探测", marker: "" });
+    case "confirm_skill_verified":
+      return Promise.resolve({ verdict: args && args.userConfirmed ? "skill_path_ok" : "skill_path_fail",
+        reason: "（预览）用户手动确认" });
+    case "cleanup_smoke_verification":
+      return Promise.resolve(null);
     default:
       return Promise.resolve(null);
   }
@@ -939,9 +999,378 @@ function wire() {
   els.quitBtn.addEventListener("click", () => call("quit_app").catch(() => {}));
 }
 
+// ═══════════════════════ 科研工具包 / 隐私 / 任务路由（bio-* 扩展）═══════════════════════
+
+let _packState = null;    // list_packs 结果缓存
+let _tasksState = null;   // list_biomed_tasks 结果缓存
+
+function _msg(id, text, kind) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "msg" + (kind ? " " + kind : "");
+}
+function _escHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadPacks() {
+  try { _packState = await call("list_packs"); }
+  catch (e) { _msg("packMsg", "读取工具包列表失败：" + e, "err"); return; }
+  renderPacks();
+  renderPrivacy();
+  _setVerifyChips(_packState && _packState.verification);
+  _renderExperimentalBanner();
+}
+
+function _renderExperimentalBanner() {
+  const el = document.getElementById("verifyStatusHint");
+  if (!el || !_packState) return;
+  const v = _packState.verification || {};
+  const exp = v.is_experimental !== false;
+  if (v.stale) {
+    const reasons = (v.stale_reasons || []).join("；");
+    el.innerHTML = `⚠ <strong>验证结果可能过期</strong>：${_escHtml(reasons)}。建议重跑 canary 验证。`;
+    return;
+  }
+  const fp = v.fingerprint || {};
+  const fpNote = (fp.science_version_at_pass && fp.science_version_at_pass !== "unknown")
+    ? `（验证时 Science ${_escHtml(fp.science_version_at_pass)}）` : "";
+  el.innerHTML = exp
+    ? 'pack 机制的两个关键路径（<code>mcp-servers.json</code> 与 <code>skills/</code>）<strong>尚未确认</strong>。所有 pack 目前按<strong>实验状态</strong>装配。跑一次 canary smoke test 即可确认。'
+    : `✓ 路径已验证。pack 装配可信度：高。${fpNote}`;
+}
+
+function renderPacks() {
+  const list = document.getElementById("packList");
+  const envList = document.getElementById("packEnvList");
+  if (!list || !envList || !_packState) return;
+  const { packs, enabled, env_set } = _packState;
+  list.innerHTML = "";
+  for (const p of packs || []) {
+    const on = !!(enabled || {})[p.id];
+    const row = document.createElement("div");
+    row.className = "packrow";
+    const missing = (p.requires_env || []).filter((k) => !(env_set || {})[k]);
+    const chip = missing.length
+      ? `<span class="chip warn" title="缺环境变量">缺 ${missing.join(", ")}</span>` : "";
+    const dep = (p.depends_on && p.depends_on.length)
+      ? `<span class="chip">依赖 ${p.depends_on.join(", ")}</span>` : "";
+    // 未通过 phase-1 验证时统一标"实验中"
+    const isExp = ((_packState.verification || {}).is_experimental !== false);
+    const expChip = (on && isExp)
+      ? `<span class="chip warn" title="MCP / Skill 路径尚未验证，请去『验证』折叠区跑 canary">实验中</span>` : "";
+    row.innerHTML = `
+      <label class="packchk">
+        <input type="checkbox" data-pack="${_escHtml(p.id)}" ${on ? "checked" : ""}>
+        <span class="packname">${_escHtml(p.name)}</span>
+        ${dep}${chip}${expChip}
+      </label>
+      <div class="packdesc">${_escHtml(p.description)}</div>`;
+    list.appendChild(row);
+  }
+  list.querySelectorAll('input[type="checkbox"][data-pack]').forEach((cb) =>
+    cb.addEventListener("change", () => togglePack(cb.dataset.pack, cb.checked, cb)));
+
+  const seen = new Set();
+  envList.innerHTML = "";
+  for (const p of (packs || [])) {
+    for (const oe of p.optional_env || []) {
+      if (seen.has(oe.name)) continue;
+      seen.add(oe.name);
+      const row = document.createElement("div");
+      row.className = "packenvrow";
+      const has = !!(env_set || {})[oe.name];
+      row.innerHTML = `
+        <label class="packenvlabel">
+          ${_escHtml(oe.label || oe.name)}
+          ${oe.url ? ` <a href="${_escHtml(oe.url)}" target="_blank" class="link">申请</a>` : ""}
+        </label>
+        <div class="row">
+          <input type="password" data-env="${_escHtml(oe.name)}" placeholder="${has ? "已存（末位掩码）" : "留空清除"}" autocomplete="off" spellcheck="false">
+          <button class="btn small" data-env-save="${_escHtml(oe.name)}">保存</button>
+        </div>`;
+      envList.appendChild(row);
+    }
+  }
+  envList.querySelectorAll("button[data-env-save]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.envSave;
+      const inp = envList.querySelector(`input[data-env="${CSS.escape(name)}"]`);
+      savePackEnv(name, inp ? inp.value : "");
+    }));
+}
+
+async function togglePack(id, enabled, cb) {
+  cb.disabled = true;
+  _msg("packMsg", `${enabled ? "启用" : "停用"} ${id}…`);
+  try {
+    const r = await call("toggle_pack", { id, enabled });
+    if (_packState) _packState.enabled[id] = enabled;
+    const parts = [];
+    if (r.note) parts.push(r.note);
+    if (r.warnings && r.warnings.length) parts.push("警告：" + r.warnings.join("; "));
+    if (r.sandbox_restarted) parts.push("为让配置生效，已停沙箱，请再点「一键开始」。");
+    _msg("packMsg", parts.join("\n") || "已保存。", r.warnings && r.warnings.length ? "err" : "ok");
+    renderPrivacy();  // 因为 bio-privacy 状态可能改了
+    await refreshStatus();
+  } catch (e) {
+    cb.checked = !enabled;
+    _msg("packMsg", `切换 ${id} 失败：${e}`, "err");
+  } finally {
+    cb.disabled = false;
+  }
+}
+
+async function savePackEnv(name, value) {
+  _msg("packMsg", `保存 ${name}…`);
+  try {
+    await call("set_pack_env", { name, value });
+    if (_packState) _packState.env_set[name] = !!value;
+    _msg("packMsg", value ? `${name} 已保存。` : `${name} 已清除。`, "ok");
+    renderPacks();
+  } catch (e) { _msg("packMsg", `保存 ${name} 失败：${e}`, "err"); }
+}
+
+// ---- 隐私 / 合规 ----
+function renderPrivacy() {
+  if (!_packState) return;
+  const chk = document.getElementById("sensitiveModeChk");
+  const chip = document.getElementById("sensitiveWarnChip");
+  const ta = document.getElementById("localHostsTa");
+  const upHost = document.getElementById("upstreamHost");
+  if (chk) chk.checked = !!_packState.sensitive_mode;
+  if (ta) ta.value = (_packState.local_endpoint_hosts || []).join("\n");
+  if (upHost) upHost.textContent = _packState.current_upstream_host || "—";
+  const bioPrivacyOn = !!(_packState.enabled || {})["bio-privacy"];
+  if (chip) chip.style.display = (_packState.sensitive_mode && !bioPrivacyOn) ? "" : "none";
+}
+
+async function setSensitiveMode(enabled) {
+  _msg("privacyMsg", `${enabled ? "启用" : "关闭"}敏感模式…`);
+  try {
+    const r = await call("set_sensitive_mode", { enabled });
+    if (_packState) _packState.sensitive_mode = !!r.sensitive_mode;
+    const bits = [];
+    if (r.sandbox_stopped) bits.push("当前 provider 不在白名单，已停沙箱。");
+    if (r.suggest_enable_bio_privacy) bits.push("建议同时启用 bio-privacy pack（PHI 扫描 + 审计）。");
+    _msg("privacyMsg", bits.join(" ") || "已保存。", r.sandbox_stopped ? "err" : "ok");
+    renderPrivacy();
+    await refreshStatus();
+  } catch (e) {
+    const chk = document.getElementById("sensitiveModeChk");
+    if (chk) chk.checked = !enabled;
+    _msg("privacyMsg", "切换敏感模式失败：" + e, "err");
+  }
+}
+
+async function saveLocalHosts(confirmPublic) {
+  const ta = document.getElementById("localHostsTa");
+  if (!ta) return;
+  const hosts = ta.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  _msg("privacyMsg", "保存白名单…");
+  try {
+    const r = await call("set_local_endpoint_hosts", { hosts, confirmPublic: !!confirmPublic });
+    if (r && r.ok === false && r.needs_confirm && r.needs_confirm.length) {
+      // 公网域名待用户二次确认（"用户明确确认的机构域名"）
+      const ok = confirm(
+        (r.hint || "以下是公网域名，敏感模式默认只允许 localhost / 私网。") + "\n\n" +
+        r.needs_confirm.join("\n") + "\n\n确认这些是你机构的受控端点？"
+      );
+      if (ok) { await saveLocalHosts(true); return; }
+      _msg("privacyMsg", "已取消：公网域名未加入白名单。", "err");
+      return;
+    }
+    if (_packState) _packState.local_endpoint_hosts = r.hosts || [];
+    const invNote = (r.invalid && r.invalid.length) ? `（忽略无法解析：${r.invalid.join(", ")}）` : "";
+    _msg("privacyMsg", `已保存 ${(r.hosts || []).length} 个受信 host。${invNote}`, "ok");
+    renderPrivacy();
+  } catch (e) { _msg("privacyMsg", "保存失败：" + e, "err"); }
+}
+
+// ---- 任务级模型路由 ----
+async function loadTasks() {
+  try { _tasksState = await call("list_biomed_tasks"); }
+  catch (e) { _msg("tasksMsg", "读取任务列表失败：" + e, "err"); return; }
+  renderTasks();
+}
+
+function renderTasks() {
+  const list = document.getElementById("taskList");
+  if (!list || !_tasksState) return;
+  const profiles = (state && state.profiles) || [];
+  const routes = _tasksState.routes || {};
+  const active = _tasksState.active_id || "";
+  const probes = _tasksState.probes || {};
+  list.innerHTML = "";
+  for (const t of _tasksState.tasks || []) {
+    const routedTo = routes[t.id] || "";
+    const currentId = routedTo || active;
+    const currentName = ((profiles.find((p) => p.id === currentId) || {}).name) || "(无生效)";
+    // 探针 chips
+    const chipHtml = ["tool_use", "long_ctx", "json_stable",
+                      "bio_eval_lit_review", "bio_eval_clinical_trials", "bio_eval_evidence_audit"]
+      .map((probe) => {
+        const key = `${currentId}:${probe}`;
+        const raw = probes[key];
+        if (!raw) return "";
+        const verdict = raw.verdict || "?";
+        const cls = verdict === "ok" || verdict === "✓" || verdict === "✓✓" ? "" : "warn";
+        return `<span class="chip ${cls}" title="${_escHtml(raw.reason || "")}">${_escHtml(probe)}: ${_escHtml(verdict)}</span>`;
+      }).join("");
+    const options = [`<option value="">(默认，跟随生效)</option>`]
+      .concat(profiles.map((p) =>
+        `<option value="${_escHtml(p.id)}" ${routedTo === p.id ? "selected" : ""}>${_escHtml(p.name)}</option>`
+      )).join("");
+    const row = document.createElement("div");
+    row.className = "taskrow";
+    row.innerHTML = `
+      <div class="taskhd">
+        <span class="taskname">${_escHtml(t.label)}</span>
+        <span class="taskprofile">当前：${_escHtml(currentName)}</span>
+      </div>
+      <div class="taskhint">${_escHtml(t.hint)}</div>
+      <div class="row">
+        <select data-task="${_escHtml(t.id)}">${options}</select>
+      </div>
+      <div class="taskchips">${chipHtml || '<span class="chip">尚无探针数据</span>'}</div>`;
+    list.appendChild(row);
+  }
+  list.querySelectorAll("select[data-task]").forEach((sel) => {
+    sel.addEventListener("change", () => setTaskRoute(sel.dataset.task, sel.value));
+  });
+}
+
+async function setTaskRoute(task, profileId) {
+  _msg("tasksMsg", `保存 ${task} 路由…`);
+  try {
+    await call("set_task_route", { task, profileId });
+    if (_tasksState) {
+      if (profileId) _tasksState.routes[task] = profileId;
+      else delete _tasksState.routes[task];
+    }
+    _msg("tasksMsg", "已保存。", "ok");
+    renderTasks();
+  } catch (e) { _msg("tasksMsg", "保存失败：" + e, "err"); }
+}
+
+async function runProbes() {
+  if (!state || !state.active_id) {
+    _msg("tasksMsg", "请先激活一个 profile。", "err");
+    return;
+  }
+  const btn = document.getElementById("probeRunBtn");
+  if (btn) btn.disabled = true;
+  _msg("tasksMsg", "跑探针中…（tool_use / long_ctx / json_stable，各 1 次 minimal 请求）");
+  try {
+    const r = await call("run_probes", {
+      req: { profile_id: state.active_id, probes: ["tool_use", "long_ctx", "json_stable"] },
+    });
+    const parts = [];
+    for (const [k, v] of Object.entries(r.results || {})) {
+      parts.push(`${k}: ${v.verdict} (${v.reason})`);
+    }
+    _msg("tasksMsg", "探针完成：\n" + parts.join("\n"), "ok");
+    await loadTasks();
+  } catch (e) { _msg("tasksMsg", "跑探针失败：" + e, "err"); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+function wireBioExtensions() {
+  const sensChk = document.getElementById("sensitiveModeChk");
+  if (sensChk) sensChk.addEventListener("change", () => setSensitiveMode(sensChk.checked));
+  const hostsBtn = document.getElementById("localHostsSaveBtn");
+  if (hostsBtn) hostsBtn.addEventListener("click", () => saveLocalHosts(false));
+  const probeBtn = document.getElementById("probeRunBtn");
+  if (probeBtn) probeBtn.addEventListener("click", runProbes);
+  // phase-1 验证按钮
+  const b1 = document.getElementById("verifyStartBtn");
+  if (b1) b1.addEventListener("click", startVerify);
+  const b2 = document.getElementById("verifyPollBtn");
+  if (b2) b2.addEventListener("click", pollVerify);
+  const b3 = document.getElementById("verifySkillOkBtn");
+  if (b3) b3.addEventListener("click", () => confirmSkill(true));
+  const b4 = document.getElementById("verifySkillFailBtn");
+  if (b4) b4.addEventListener("click", () => confirmSkill(false));
+  const b5 = document.getElementById("verifyCleanupBtn");
+  if (b5) b5.addEventListener("click", cleanupVerify);
+}
+
+// ---- phase-1 路径验证 ----
+function _setVerifyChips(verification) {
+  const mcpChip = document.getElementById("verifyMcpChip");
+  const skillChip = document.getElementById("verifySkillChip");
+  const map = {
+    unverified: { text: "未验证", cls: "warn" },
+    mcp_path_pending: { text: "已写 canary，待检查", cls: "warn" },
+    mcp_path_ok: { text: "✓ 路径正确", cls: "" },
+    mcp_path_fail: { text: "✗ 不通过", cls: "warn" },
+    skill_path_ok: { text: "✓ 路径正确", cls: "" },
+    skill_path_fail: { text: "✗ 不通过", cls: "warn" },
+  };
+  if (mcpChip && verification) {
+    const m = map[verification.mcp_verdict] || map.unverified;
+    mcpChip.textContent = m.text;
+    mcpChip.className = "chip " + m.cls;
+  }
+  if (skillChip && verification) {
+    const m = map[verification.skill_verdict] || map.unverified;
+    skillChip.textContent = m.text;
+    skillChip.className = "chip " + m.cls;
+  }
+}
+
+async function startVerify() {
+  _msg("verifyMsg", "写入 canary MCP + Skill…");
+  try {
+    const r = await call("start_smoke_verification");
+    _msg("verifyMsg", `已写 canary（marker=${r.marker.slice(0, 8)}…）。${r.next_step}`, "ok");
+    if (_packState) _packState.verification = _packState.verification || {};
+    _packState.verification.mcp_verdict = "mcp_path_pending";
+    _setVerifyChips(_packState.verification);
+  } catch (e) { _msg("verifyMsg", "写 canary 失败：" + e, "err"); }
+}
+async function pollVerify() {
+  _msg("verifyMsg", "检查 canary marker…");
+  try {
+    const r = await call("poll_smoke_verification");
+    _msg("verifyMsg", r.reason, r.verdict === "mcp_path_ok" ? "ok" : "err");
+    if (_packState) {
+      _packState.verification = _packState.verification || {};
+      _packState.verification.mcp_verdict = r.verdict;
+      _setVerifyChips(_packState.verification);
+    }
+  } catch (e) { _msg("verifyMsg", "检查失败：" + e, "err"); }
+}
+async function confirmSkill(ok) {
+  _msg("verifyMsg", ok ? "记录 skill 路径通过…" : "记录 skill 路径不通过…");
+  try {
+    const r = await call("confirm_skill_verified", { userConfirmed: ok });
+    _msg("verifyMsg", r.reason, ok ? "ok" : "err");
+    if (_packState) {
+      _packState.verification = _packState.verification || {};
+      _packState.verification.skill_verdict = r.verdict;
+      _setVerifyChips(_packState.verification);
+    }
+  } catch (e) { _msg("verifyMsg", "保存失败：" + e, "err"); }
+}
+async function cleanupVerify() {
+  _msg("verifyMsg", "清理 canary…");
+  try {
+    await call("cleanup_smoke_verification");
+    _msg("verifyMsg", "已清理 canary MCP + Skill。可以重启沙箱继续正常使用。", "ok");
+  } catch (e) { _msg("verifyMsg", "清理失败：" + e, "err"); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+
 window.addEventListener("DOMContentLoaded", async () => {
   wire();
+  wireBioExtensions();
   await loadConfig();
+  await loadPacks();
+  await loadTasks();
   try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}
   await refreshStatus();
   if (PREVIEW) {

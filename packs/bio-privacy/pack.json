@@ -1,0 +1,14 @@
+{
+  "id": "bio-privacy",
+  "name": "隐私 / 合规模式",
+  "description": "面向临床 / 患者数据：PHI 检测与脱敏、『敏感数据只允许本地 / 机构端点』总开关、每次对话的审计日志（模型 / 时间 / 输入摘要，绝不记原文）。含 Skill 强制在处理疑似临床数据前先走扫描。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "servers": [
+    {"name": "bio-privacy-phi",   "script": "packs/bio-privacy/phi_server.py"},
+    {"name": "bio-privacy-audit", "script": "packs/bio-privacy/audit_server.py"}
+  ],
+  "skills": [
+    {"id": "sensitive-mode", "src": "packs/bio-privacy/skills/sensitive-mode"}
+  ]
+}

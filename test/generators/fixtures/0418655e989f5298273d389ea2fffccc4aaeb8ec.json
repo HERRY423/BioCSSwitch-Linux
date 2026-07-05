@@ -1,0 +1,10 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "POST",
+    "canonical_url": "https://api.platform.opentargets.org/api/v4/graphql",
+    "params_redacted": {},
+    "body_sha1": "4ae56bc1bab40e3860e8053de7e26da29e99e607"
+  },
+  "response_body": "{\"data\": {\"target\": {\"id\": \"ENSG00000012048\", \"approvedSymbol\": \"BRCA1\", \"approvedName\": \"BRCA1 DNA repair associated\", \"tractability\": [{\"modality\": \"SM\", \"label\": \"Structure\", \"value\": false}], \"knownDrugs\": {\"count\": 0, \"uniqueDrugs\": 0, \"uniqueTargets\": 0, \"rows\": []}}}}"
+}

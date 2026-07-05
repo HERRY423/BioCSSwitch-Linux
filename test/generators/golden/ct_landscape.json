@@ -1,0 +1,55 @@
+{
+  "n_trials": 2,
+  "nct_ids": [
+    "NCT01111111",
+    "NCT02222222"
+  ],
+  "phase_status_matrix": {
+    "PHASE2": {
+      "COMPLETED": 1
+    },
+    "PHASE3": {
+      "RECRUITING": 1
+    }
+  },
+  "primary_endpoints": [
+    [
+      "Overall Survival (OS)",
+      1
+    ],
+    [
+      "Objective Response Rate (ORR)",
+      1
+    ]
+  ],
+  "secondary_endpoints": [
+    [
+      "Progression-Free Survival (PFS)",
+      1
+    ],
+    [
+      "Overall Survival (OS)",
+      1
+    ]
+  ],
+  "top_countries": [
+    [
+      "United States",
+      1
+    ],
+    [
+      "France",
+      1
+    ]
+  ],
+  "top_sponsors": [
+    [
+      "Merck Sharp & Dohme",
+      1
+    ],
+    [
+      "Bristol-Myers Squibb",
+      1
+    ]
+  ]
+}

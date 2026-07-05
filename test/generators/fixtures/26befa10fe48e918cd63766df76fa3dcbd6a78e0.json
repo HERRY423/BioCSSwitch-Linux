@@ -1,0 +1,10 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://rest.genenames.org/fetch/symbol/EGFR",
+    "params_redacted": {},
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"response\": {\"docs\": [{\"hgnc_id\": \"HGNC:3236\", \"symbol\": \"EGFR\", \"name\": \"epidermal growth factor receptor\", \"uniprot_ids\": [\"P00533\"], \"ensembl_gene_id\": \"ENSG00000146648\", \"entrez_id\": \"1956\", \"locus_group\": \"protein-coding gene\"}]}}"
+}

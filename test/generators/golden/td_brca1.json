@@ -1,0 +1,30 @@
+{
+  "chembl": {
+    "active_compounds_pchembl_6": 3,
+    "pref_name": "Breast cancer type 1 susceptibility protein",
+    "target_chembl_id": "CHEMBL5334"
+  },
+  "druggability_class": "unknown",
+  "druggability_class_evidence": "DNA damage DNA repair Ubl conjugation pathway  Belongs to the RING-type zinc finger family.",
+  "ensembl_id": "ENSG00000012048",
+  "found": true,
+  "hgnc_id": "HGNC:1100",
+  "name": "BRCA1 DNA repair associated",
+  "open_targets": {
+    "drug_count": 0,
+    "tractability_flags": [],
+    "unique_drugs": 0
+  },
+  "symbol": "BRCA1",
+  "uniprot": {
+    "accession": "P38398",
+    "keywords_head": "DNA damage DNA repair Ubl conjugation pathway"
+  },
+  "verdict": {
+    "grade": "D",
+    "rationale": [
+      "结构类别未定 (+1)",
+      "ChEMBL 里 3 个化合物 (+1)"
+    ]
+  }
+}

@@ -9,9 +9,14 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// 探测类型：Models 验端点+鉴权（透传预设保存/获取模型）；Message 验具体模型（选了模型时）。
+/// CustomPost 给 phase-2 生医探针用：自定义 payload + 保留响应 body。
 pub enum ProbeKind {
     Models,
     Message,
+    /// 给非 active profile 的生医探针用：`(payload, wanted_body_slice)`——payload 是完整
+    /// `/v1/messages` JSON 字节，第二个字段是"要不要把 body 也带回"（bio 探针要看
+    /// tool_use / JSON 结构）。
+    CustomPost(Vec<u8>, bool),
 }
 
 /// 一次探测的原始结果。
@@ -186,6 +191,23 @@ pub fn scratch_probe(
                     status: None,
                     body: String::new(),
                 },
+            }
+        }
+        ProbeKind::CustomPost(payload, want_body) => {
+            if want_body {
+                match crate::proc::http_post_status_body(
+                    port, Some(&secret), "/v1/messages", &payload, 30000,
+                ) {
+                    Some((code, body)) => ProbeResult { status: code, body },
+                    None => ProbeResult { status: None, body: String::new() },
+                }
+            } else {
+                match crate::proc::http_post_status(
+                    port, Some(&secret), "/v1/messages", &payload, 30000,
+                ) {
+                    Some(code) => ProbeResult { status: Some(code), body: String::new() },
+                    None => ProbeResult { status: None, body: String::new() },
+                }
             }
         }
     }

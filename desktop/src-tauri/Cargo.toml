@@ -29,4 +29,7 @@ aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
+# host 规范化（敏感模式白名单）：scheme/port/trailing-dot 剥离 + IDNA punycode。
+# `url` 已由 tauri 传递依赖引入（Cargo.lock 里 url 2.5 / idna 1.1），显式声明近乎零成本。
+url = "2"
 

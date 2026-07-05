@@ -1,0 +1,16 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=mesh&email=%3Credacted%3E&id=68008687&retmode=json&tool=%3Credacted%3E",
+    "params_redacted": {
+      "tool": "<redacted>",
+      "email": "<redacted>",
+      "db": "mesh",
+      "id": "68008687",
+      "retmode": "json"
+    },
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"result\": {\"uids\": [\"68008687\"], \"68008687\": {\"uid\": \"68008687\", \"ds_meshui\": \"Metformin\", \"ds_meshterms\": \"Metformin\", \"title\": \"Metformin\", \"ds_meshtreenumberlist\": [\"C18.452.394.750.149\"], \"ds_scopenote\": \"synthetic fixture scope note\", \"ds_entryterms\": []}}}"
+}

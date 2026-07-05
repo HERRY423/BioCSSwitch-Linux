@@ -1,0 +1,15 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://www.ebi.ac.uk/chembl/api/data/activity.json?format=json&limit=1&pchembl_value__gte=6&target_chembl_id=CHEMBL5334",
+    "params_redacted": {
+      "target_chembl_id": "CHEMBL5334",
+      "pchembl_value__gte": 6,
+      "limit": 1,
+      "format": "json"
+    },
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"activities\": [], \"page_meta\": {\"total_count\": 3}}"
+}

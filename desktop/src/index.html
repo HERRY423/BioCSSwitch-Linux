@@ -105,6 +105,71 @@
         </div>
       </details>
 
+      <!-- ─────── phase-1 路径验证 ─────── -->
+      <details class="sec packs tp-only list-only" id="verifySec">
+        <summary>🧪 验证 MCP / Skill 路径（phase-1）</summary>
+        <div class="hint" id="verifyStatusHint">pack 机制的两个关键路径（<code>mcp-servers.json</code> 与 <code>skills/</code>）目前是<strong>猜测</strong>：Claude Science 二进制侧尚未逆向确认。跑一次 canary smoke test 就能真正知道它是否生效。</div>
+        <div class="verifyRow">
+          <span>MCP 路径</span>
+          <span class="chip" id="verifyMcpChip">未验证</span>
+        </div>
+        <div class="verifyRow">
+          <span>Skill 路径</span>
+          <span class="chip" id="verifySkillChip">未验证</span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn small" id="verifyStartBtn">开始验证（写 canary）</button>
+          <button class="btn small" id="verifyPollBtn">检查 canary</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button class="btn small" id="verifySkillOkBtn">✓ 在 Science 里看到 canary-ok</button>
+          <button class="btn small" id="verifySkillFailBtn">✗ 没看到</button>
+          <button class="btn small" id="verifyCleanupBtn">清理 canary</button>
+        </div>
+        <div class="msg" id="verifyMsg" role="status" aria-live="polite"></div>
+      </details>
+
+      <!-- ─────── 科研工具包（bio-* pack） ─────── -->
+      <details class="sec packs tp-only list-only" id="packsSec">
+        <summary>🧬 科研工具包（MCP + Skill）</summary>
+        <div class="hint">勾选后写入沙箱 MCP 配置；Science 只在启动时读一次配置，改动会自动停沙箱，请再点「一键开始」。官方模式下不装配。</div>
+        <div id="packList" class="packlist"></div>
+        <details class="packadv">
+          <summary>可选环境变量（API key）</summary>
+          <div id="packEnvList" class="packenvlist"></div>
+        </details>
+        <div class="msg" id="packMsg" role="status" aria-live="polite"></div>
+      </details>
+
+      <!-- ─────── 隐私 / 合规（敏感数据模式） ─────── -->
+      <details class="sec packs tp-only list-only" id="privacySec">
+        <summary>🔒 隐私 / 合规</summary>
+        <div class="hint">开启敏感模式后，任何**不在受信端点白名单**里的 provider 都不允许起沙箱；建议同时启用 <code>bio-privacy</code> pack。当前上游 host：<span id="upstreamHost">—</span></div>
+        <label class="packchk" style="margin-top:8px">
+          <input type="checkbox" id="sensitiveModeChk">
+          <span class="packname">启用敏感 / 合规模式</span>
+          <span class="chip warn" id="sensitiveWarnChip" style="display:none">建议同时启用 bio-privacy</span>
+        </label>
+        <div class="packenvrow" style="margin-top:8px">
+          <label class="packenvlabel">受信端点白名单（每行一个 host，如 <code>llm.hospital.internal</code>）</label>
+          <textarea id="localHostsTa" class="hostsTa" rows="3" placeholder="llm.hospital.internal
+ollama.local"></textarea>
+          <div class="row"><button class="btn small" id="localHostsSaveBtn">保存白名单</button></div>
+        </div>
+        <div class="msg" id="privacyMsg" role="status" aria-live="polite"></div>
+      </details>
+
+      <!-- ─────── 生医任务级模型路由 ─────── -->
+      <details class="sec packs tp-only list-only" id="tasksSec">
+        <summary>🧭 生医任务 → profile 路由</summary>
+        <div class="hint">按科研任务选 profile（不勾走默认当前生效）。旁边的 chip 显示已跑过的探针结果，帮你判断哪个 profile 更适合哪种任务。</div>
+        <div id="taskList" class="tasklist"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn small" id="probeRunBtn">对当前 profile 跑三条微探针</button>
+        </div>
+        <div class="msg" id="tasksMsg" role="status" aria-live="polite"></div>
+      </details>
+
       <!-- 反馈消息：有真实反馈（表单错误 / 回滚 / 保存结果 / 自检）才显示，空闲不占位。 -->
       <div class="sec feedback" hidden>
         <div class="msg" id="msg" role="status" aria-live="polite"></div>

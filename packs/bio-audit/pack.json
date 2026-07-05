@@ -1,0 +1,21 @@
+{
+  "id": "bio-audit",
+  "name": "证据链与引用审计",
+  "description": "为每条医学结论强制绑定 PMID / DOI / NCT，逐条到 PubMed / Crossref / ClinicalTrials.gov 校验真实性，并按证据类型（meta-analysis / RCT / observational / animal / in vitro）分层。含一个 Skill 规范强制引用格式与证据表输出。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "depends_on": ["bio-lit"],
+  "servers": [
+    {
+      "name": "bio-audit-verify",
+      "script": "packs/bio-audit/evidence_verify_server.py",
+      "env_pass": ["NCBI_API_KEY", "NCBI_EMAIL", "CROSSREF_MAILTO"]
+    }
+  ],
+  "skills": [
+    {
+      "id": "evidence-audit",
+      "src": "packs/bio-audit/skills/evidence-audit"
+    }
+  ]
+}

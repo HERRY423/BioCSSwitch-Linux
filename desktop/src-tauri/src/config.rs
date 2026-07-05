@@ -13,6 +13,7 @@
 //! 所有函数以显式 `dir` 参数工作，便于用临时目录做无副作用的单元测试；
 //! 生产代码用 [`default_dir`]（`$HOME/.csswitch`）。
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -87,6 +88,38 @@ pub struct Config {
     /// 运行模式："proxy"（第三方）| "official"（真实 Claude Science）。
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// ── 科研工具包（bio-* pack）扩展 ────────────────────────────────────────
+    /// pack id → 是否启用（true 装配到沙箱 MCP 配置）。
+    #[serde(default)]
+    pub enabled_packs: BTreeMap<String, bool>,
+    /// pack MCP 需要的可选环境变量（NCBI_API_KEY / OPENFDA_API_KEY / CROSSREF_MAILTO 等）。
+    /// 明文 0600 存盘，回显给前端只给"有/无"（跟 profile key 掩码同等级）。
+    /// 由后端根据每个 server 的 env_pass 白名单注入 MCP 子进程 env。
+    #[serde(default)]
+    pub pack_env: BTreeMap<String, String>,
+    /// 敏感 / 合规模式。开启后 one_click_login 拒绝把请求发给不在 `local_endpoint_hosts`
+    /// 白名单里的 provider。首次开启白名单空 → 所有云 provider 都被拦。
+    #[serde(default)]
+    pub sensitive_mode: bool,
+    /// 敏感模式白名单 host（小写，精确匹配 upstream_host(...) 的返回值）。
+    #[serde(default)]
+    pub local_endpoint_hosts: Vec<String>,
+    /// ── 任务级模型路由（feature 1）───────────────────────────────────────
+    /// task 名（lit-review / clinical-trials-search / target-discovery / long-context-pdf /
+    /// tool-heavy / omics-code 等）→ profile_id。空表示走 active_id。前端 UI 靠这个 map
+    /// 呈现"任务 → profile"矩阵，用户可覆盖默认。
+    #[serde(default)]
+    pub task_routes: BTreeMap<String, String>,
+    /// 探针结果缓存：`"<profile_id>:<probe_name>"` → 结果 JSON 字符串。
+    /// 探针由前端命令触发，写回这里供任务路由 UI 显示"合适/不合适"标记。
+    /// 结果里带 `ts` 时间戳；调用方判断新鲜度。
+    #[serde(default)]
+    pub probe_results: BTreeMap<String, String>,
+    /// ── phase-1 路径验证结果 ──────────────────────────────────────────────
+    /// `packs::MCP_CONFIG_REL` / `packs::SKILLS_REL` 猜的路径是否真的被 Science 认可。
+    /// 未验证或未通过时，前端 pack 列表会显示"实验中"chip，让用户知道功能可能不生效。
+    #[serde(default)]
+    pub verification: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -99,6 +132,13 @@ impl Default for Config {
             sandbox_port: default_sandbox_port(),
             secret: String::new(),
             mode: default_mode(),
+            enabled_packs: BTreeMap::new(),
+            pack_env: BTreeMap::new(),
+            sensitive_mode: false,
+            local_endpoint_hosts: Vec::new(),
+            task_routes: BTreeMap::new(),
+            probe_results: BTreeMap::new(),
+            verification: BTreeMap::new(),
         }
     }
 }
@@ -227,6 +267,13 @@ pub fn migrate_v1_to_v2(mut legacy: crate::config_legacy::ConfigV1) -> Config {
         sandbox_port: legacy.sandbox_port,
         secret: legacy.secret,
         mode: legacy.mode,
+        enabled_packs: BTreeMap::new(),
+        pack_env: BTreeMap::new(),
+        sensitive_mode: false,
+        local_endpoint_hosts: Vec::new(),
+        task_routes: BTreeMap::new(),
+        probe_results: BTreeMap::new(),
+        verification: BTreeMap::new(),
     }
 }
 
@@ -302,6 +349,55 @@ fn atomic_copy(src: &Path, dst: &Path) -> io::Result<()> {
     }
     fs::set_permissions(dst, fs::Permissions::from_mode(0o600))?;
     Ok(())
+}
+
+/// Atomically write a config-like file with mode 0600 and symlink checks.
+pub fn write_bytes_atomic_0600(path: &Path, data: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        assert_not_symlink(parent)?;
+        fs::create_dir_all(parent)?;
+    }
+    assert_not_symlink(path)?;
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+
+    for attempt in 0..32 {
+        let tmp = parent.join(format!(
+            ".{name}.tmp-{}-{:?}-{}-{attempt}",
+            std::process::id(),
+            std::thread::current().id(),
+            now_ms()
+        ));
+        let write_res = (|| -> io::Result<()> {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp);
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                continue;
+            }
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("could not allocate a unique temp file for {}", path.display()),
+    ))
 }
 
 /// 迁移前备份旧 config.json → config.json.v1.bak。源不存在 / 备份失败 → Err（中止迁移）。

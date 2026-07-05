@@ -1,0 +1,26 @@
+{
+  "id": "bio-gene",
+  "name": "基因 / 变异 / 蛋白数据库",
+  "description": "NCBI Gene / ClinVar / dbSNP / GEO / SRA（E-utilities）+ UniProt（蛋白）+ Ensembl（跨物种基因组）。全部匿名免费，NCBI 可选 API key。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "optional_env": [
+    {"name": "NCBI_API_KEY", "label": "NCBI API Key（可选）"},
+    {"name": "NCBI_EMAIL", "label": "NCBI 联系邮箱（可选）"}
+  ],
+  "servers": [
+    {
+      "name": "bio-gene-ncbi",
+      "script": "packs/bio-gene/ncbi_server.py",
+      "env_pass": ["NCBI_API_KEY", "NCBI_EMAIL"]
+    },
+    {
+      "name": "bio-gene-uniprot",
+      "script": "packs/bio-gene/uniprot_server.py"
+    },
+    {
+      "name": "bio-gene-ensembl",
+      "script": "packs/bio-gene/ensembl_server.py"
+    }
+  ]
+}

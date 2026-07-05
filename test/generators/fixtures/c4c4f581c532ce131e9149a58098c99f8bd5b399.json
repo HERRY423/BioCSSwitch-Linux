@@ -1,0 +1,10 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://rest.uniprot.org/uniprotkb/P38398.json",
+    "params_redacted": {},
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"primaryAccession\": \"P38398\", \"proteinDescription\": {\"recommendedName\": {\"fullName\": {\"value\": \"Breast cancer type 1 susceptibility protein\"}}}, \"genes\": [{\"geneName\": {\"value\": \"BRCA1\"}}], \"organism\": {\"scientificName\": \"Homo sapiens\", \"taxonId\": 9606}, \"sequence\": {\"length\": 1863}, \"keywords\": [{\"name\": \"DNA damage\"}, {\"name\": \"DNA repair\"}, {\"name\": \"Ubl conjugation pathway\"}], \"comments\": [{\"commentType\": \"SIMILARITY\", \"texts\": [{\"value\": \"Belongs to the RING-type zinc finger family.\"}]}]}"
+}

@@ -4,6 +4,124 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [Unreleased] — 生医研究扩展（证据图 / 不确定性 / 编译器 / benchmark）
+
+> 主题：从"引用真不真"升级到"结论站不站得住 + 盲区在哪"。四条主线，全部离线可测（并入 `test/test_bio_offline.py`）。
+
+### 新增 Added
+- **1. Claim 级证据图（bio-audit）**：不止验 PMID/DOI/NCT 存在。新增 `_lib/evidence_profile.py`（可解释启发式：物种优先信 MeSH CheckTag、样本量正则挖摘要、回顾/前瞻看 MeSH、临床分期看摘要，每个推断带 `signals` 溯源）；bio-audit 新增两个 MCP 工具：`evidence_profile`（单篇：物种/人群/样本量/实验类型如"临床 II 期·动物·体外·回顾性队列"/疾病阶段）与 `evidence_graph`（每条 claim 绑证据 → 证据等级 + **适用边界** + **conflicts**（含"断言人类但证据是动物"的错配）+ **counter_evidence**（`stance:refutes` 反例）+ verdict，返回 nodes/edges 图）。`parse_pubmed_xml` 增抽 `mesh_terms`。
+- **2. 不确定性优先（强制五段面板）**：bio-audit 新增 `uncertainty_ledger` 工具——吃 evidence_graph 结果，自动派生 **Known knowns / Known unknowns / Conflicts / Missing data / Next experiment** 并渲染 Markdown。新增横切 skill `uncertainty-first` 定义标准+反例；6 个 workflow skill（lit-review/target-discovery/geo-triage/trial-landscape/reviewer-response/grant-specific-aims）结尾都加了"结论不得省略五段面板"的硬约束。
+- **3. 研究问题编译器（新 pack `bio-compiler`）**：`compile_research_question` 把模糊问题（"EGFR 在 GBM 里还有没有新靶点价值"）编译成结构化任务书——研究对象/疾病/分子/干预/终点/数据库/排除标准/证据等级门槛/推荐工具链/推荐 skill/`gaps`，每字段带 `via` 溯源，识别不到标 `needs_user_input` 不编。含 `compiler_capabilities`（自述覆盖范围）+ `question-compiler` skill（强制"先编译、回填缺口、再检索"）。
+- **4. bio_eval 升级为多维 benchmark**：从 6 类 10 case 扩到 **9 类 ~49 case**（文献综述/临床试验/靶点发现/药物再利用/组学分析/证据审计/PHI 处理/JSON 稳定性/多轮工具调用），拆进 `cases_data/<category>.py`。新增 `rubric.py` 多维评分——不再只看"调没调工具"，还看 `grounded`（结果 ID 是否真来自工具输出）、`uncertainty`（是否输出五段面板）、`json_valid`、`custom`（PHI 不泄漏 / 多轮轮数 / 审计 verdict 被引用）+ 编 ID 乘法惩罚（`expected_fake_ids` 排除故意埋的假 ID）。`run.py` 捕获 tool 结果供 grounding 评分，新增 `--list` / `--selftest`。框架支持扩到每类 20–50（README 附扩充路线）。
+
+### 变更 Changed
+- `test/test_bio_offline.py` 新增 4 组离线断言（evidence_profile / evidence_graph+ledger / question_compiler / bio_eval rubric selftest），CI 零网络覆盖上述新功能。
+- `tool_executor.py` 加载 bio-privacy(phi) + bio-compiler 两个 server（PHI / 编译器 case 可离线执行）。
+
+## [Unreleased] — 生医研究扩展（五点加固）
+
+> 主题：把前面搭好的骨架**做扎实**。真实 tool loop、离线 golden tests、隐私默认脱敏、host 规范化、验证环境指纹。
+
+### 新增 / 变更 Added / Changed
+- **1. bio_eval 进入真实 tool loop**：`run.py` 从"单轮只看是否发 tool_use"升级为**完整 agent 循环**——模型发 `tool_use` → `tool_executor.py` 真跑本地 MCP handler（复用 pack/shim 已注册 handler）→ `tool_result` 回灌 → 模型继续（`--max-turns`）→ 最终答案跑 `evidence_linter` 校验引用真实性。评分 = case scorer × (1 − 假引用比例)，全假归零。设 `CSSWITCH_HTTP_FIXTURES` 可全离线。
+- **2. generator fixture / golden tests**：新增 `_lib/fixtures.py` HTTP 回放层（replay/record/auto，录制自动脱敏 api_key/token/mailto）。`test/generators/synth_fixtures.py` 离线合成 19 条 fixture（MeSH/HGNC/UniProt/ChEMBL/Open Targets/CT.gov 各 1–2 个），`test_generators_golden.py` 默认离线比对 golden，`make_fixtures.py --live` 录真实数据，`--live` 集成测试只校验结构不变式。
+- **3. 证据 linter 默认脱敏**：JSON 默认只导 `line_sha256`（关联同行 finding 而不泄露内容）+ privacy note；`--include-line-text` 才导行原文（且 note 变 PHI 警告），`--no-metadata` 可连公开文献元数据一起关。防止扫病历 / 内部材料时把敏感上下文带进报告。
+- **4. 敏感模式 host 规范化**（新增 `netcanon.rs` + `url`/`idna` 依赖）：`set_local_endpoint_hosts` 现接受 URL 或裸 host，统一成 host（去 scheme/port/末尾点、小写、**IDNA punycode**）。分类 localhost / 私网 IP / 公网域名：前两者自动收，公网域名**只在 `confirm_public=true`（用户明确确认机构端点）时收**。denylist 扩到含子域匹配。`assert_sensitive_ok` 两边都规范化后比对。含 8 条单元测试。
+- **5. 验证记录环境指纹**：`config.verification` 加存 Science 版本 / `MCP_CONFIG_REL` / `SKILLS_REL` / python 路径 / marker / 通过时间 / 最后失败原因。`verification_summary` 自动比对当前 vs 通过时指纹，Science 更新导致路径可能变时 `stale=true`，面板弹"验证结果可能过期，建议重跑"。
+- 新增离线自测 `test/test_bio_offline.py`（fixture 回放 / tool_executor / linter 隐私 / generator golden），接进 `run_all.sh`，CI 零网络零代理可跑。
+
+### 跨平台
+- 所有 CLI（run.py / lab.py / evidence_linter.py / golden test / synth）强制 UTF-8 stdout，修 Windows 控制台 GBK 编不出 ✓/⚠ 的崩溃。
+
+## [Unreleased] — 生医研究扩展（四阶段）
+
+### 新增 Added — phase-1 路径验证
+- **canary smoke test 框架**：解决"MCP / Skill 路径靠猜"的诚实性问题。
+  - `packs/_lib/smoke/smoke_mcp.py` — canary MCP，启动时往 `~/.csswitch/smoke/latest.json` 写 marker
+  - `packs/_lib/smoke/canary_skill/SKILL.md` — canary Skill，触发词固定短语
+  - `desktop/src-tauri/src/verification.rs` — prepare / poll / cleanup canary
+  - 4 个 Tauri 命令：`start_smoke_verification` / `poll_smoke_verification` / `confirm_skill_verified` / `cleanup_smoke_verification`
+  - `config.verification` 存 verdict + marker + last_run + reason
+  - 面板新增「🧪 验证 MCP / Skill 路径」折叠区，未验证时每个已启用 pack 显示"实验中"chip
+- `docs/bio-unknowns.md` — 权威追踪清单，`U/S/M/F/V` 五档可信度
+
+### 新增 Added — phase-2 补丁
+- `docs/implementation-notes/bio-audit.md` / `bio-mcp-shim.md` — 明写"已实现 / 已知不完美 / 依赖的未验证事实"
+- `packs/bio-audit/evidence_linter.py` — 离线批量证据 linter（PMID / DOI / NCT 存在性 + 证据类型匹配），CI 友好 `--strict --format json`
+- **非 active profile 探针**：`run_probes` 支持非当前 profile，走 `scratch::scratch_probe`（新增 `ProbeKind::CustomPost`），探完杀净临时代理
+
+### 新增 Added — phase-3 评测实验室
+- `test/bio_eval/lab.py` — 端到端评测编排器
+  - `--matrix label:proxy_url,label:proxy_url` 支持 provider 矩阵
+  - `--iterations N` 多次重复算 mean / stdev；n<3 明示 low confidence
+  - `--html-report` 输出报告卡 HTML
+  - `--junit-xml --fail-under 0.5` CI 集成
+  - `--save-artifacts` 逐 case 落 raw request/response 到 `results/artifacts/`
+
+### 新增 Added — phase-4 高质量 workflow 生成器
+- `packs/bio-workflows/generators/sr_pico_builder.py` — PICO → 真实 PubMed / Europe PMC / Cochrane 检索式（MeSH 词从 NCBI 拉，不猜）
+- `packs/bio-workflows/generators/ct_landscape.py` — CT.gov v2 → Markdown landscape 报告（phase×status 矩阵 + endpoint 归一 + sponsor 归一）
+- `packs/bio-workflows/generators/td_druggability.py` — HGNC + UniProt + ChEMBL + Open Targets → druggability A/B/C/D 评分卡 + 反查链接
+- `packs/bio-workflows/generators/omics_deseq2.py` — 完整 DESeq2 + apeglm shrinkage + Hallmark GSEA R 脚本生成器（batch 自动处理 / QC / volcano / heatmap）
+- `packs/bio-workflows/generators/README.md` — 三条原则：数据从真实上游拉 · 可反查 · 不代跑分析
+
+### 变更 Changed
+- `config.rs` +1 字段 `verification: BTreeMap<String, String>`
+- `scratch.rs` +1 变体 `ProbeKind::CustomPost(Vec<u8>, bool)`
+- `list_packs` 返回附带 `verification` 摘要，用于 UI 决定是否标"实验中"
+
+## [Unreleased] — 生医研究扩展
+
+> 主题：面向生物医学研究场景的扩展。共三大新特性 + 三大补丁包，从 v0.3.1 增量而来。**未改动主线 v0.3.x 的多 profile / relay / DSML 语义**；铁律零回退。
+
+### 新增 Added — 三大新特性
+
+- **1. 生医任务级模型路由**：不只是选 provider，按科研任务选模型。
+  - 后端加 `config.task_routes: BTreeMap<task_id, profile_id>` + `config.probe_results: BTreeMap<key, json>`。
+  - 内置任务清单（`packs::BIOMED_TASKS`）：lit-review / clinical-trials / target-discovery / omics-code / long-context-pdf / tool-heavy / evidence-check / phi-sensitive。
+  - Tauri 命令 `list_biomed_tasks` / `set_task_route` / `run_probes`。
+  - 面板新增「🧭 生医任务 → profile 路由」折叠区，每个任务一行 select + 探针结果 chip。
+  - `run_probes` 打三条 micro 探针（tool_use / long_ctx / json_stable），一发一次，结果写回 `probe_results`，UI 显示"合适/不合适"chip。
+
+- **2. 远程 MCP 本地替身层（bio-mcp-shim pack）**：让 Science 仍看到 `pubmed` / `clinical-trials` / `chembl` / `biorxiv` 同名 MCP，实际流量走本地 API + 用户 key。
+  - 靠 `ServerDef.aliases` —— 本地 MCP 以多个名字挂进 mcp-servers.json；开启后 Science 里同时看到本项目命名（`bio-mcp-shim-pubmed`）和 Anthropic 兼容名（`pubmed`）。
+  - 4 个 shim（pubmed / ctgov / chembl / biorxiv）覆盖远程 MCP 惯用工具名：`search_articles / search_trials / compound_search / search_preprints` 等。
+  - 冲突处理：用户已手工挂了同名 MCP → 保留原有，跳过 alias 注册并 warning。
+
+- **3. 生医工具调用回归测试集（`test/bio_eval/`）**：
+  - 10 个 case 覆盖 pubmed / ctgov / chembl / biorxiv / audit / json 六大类；靠正则挖规范格式 ID，编 ID 给 0 分。
+  - `python test/bio_eval/run.py --proxy ... --write-to-config` 会把 per-category 得分写回 `probe_results` 作为 rich 结果，与桌面 app 探针互补。
+  - 阈值：`✓✓ ≥ 0.9` · `✓ ≥ 0.7` · `⚠ ≥ 0.4` · `✗ < 0.4`。
+
+### 新增 Added — 补丁包（前一轮已实施，本轮适配 v0.3 profile 架构）
+
+- **科研工具包 pack 机制**：面板「🧬 科研工具包」折叠区，一键启用/停用一组本地 MCP + Skill，写进沙箱 Claude Science 的 mcp-servers.json。
+  - `bio-lit` — PubMed / Europe PMC / Crossref / bioRxiv / medRxiv 检索
+  - `bio-audit` — PMID / DOI / NCT 校验 + 证据类型分层 + Skill 强制规范
+  - `bio-trials` — ClinicalTrials.gov v2
+  - `bio-gene` — NCBI Gene / ClinVar / dbSNP / GEO / SRA + UniProt + Ensembl
+  - `bio-drug` — ChEMBL / Open Targets / RxNorm / openFDA
+  - `bio-norm` — HGNC / MeSH / MONDO / HPO / GO / ChEBI + `disambiguate(term, context)`
+  - `bio-workflows` — 6 个 Skill 预设：lit-review / target-discovery / geo-triage / trial-landscape / reviewer-response / grant-specific-aims
+  - `bio-privacy` — PHI 扫描（HIPAA + 中文 identifier）+ 一致占位符脱敏 + 追加式 JSON-Lines 审计日志 + Skill 强制"先扫再问"
+
+- **敏感 / 合规模式（`config.sensitive_mode`）**：开启后 `one_click_login` 拒绝把请求发给不在 `local_endpoint_hosts` 白名单里的 provider。白名单**反向防御**：`api.deepseek.com` / `dashscope.aliyuncs.com` / `api.anthropic.com` / `openai.com` / `open.bigmodel.cn` / `api.xiaomimimo.com` / `api.siliconflow.cn` / `openrouter.ai` 一律拒绝加入。面板新增「🔒 隐私 / 合规」折叠区。
+
+### 变更 Changed
+- `config.rs`：Config 加 6 个字段（`enabled_packs / pack_env / sensitive_mode / local_endpoint_hosts / task_routes / probe_results`）。全部 `#[serde(default)]`，旧文件读取兼容。
+- `packs.rs`：新增模块，pack 加载 + apply/purge + alias 处理 + Skill 装配。
+- `proc.rs`：新增 `http_post_status_body`（POST 返回 status + body），供 `run_probes` 判断响应内容。
+- `set_mode("official")` 现顺带 `packs::purge_bio_from_mcp`；`one_click_login` 起沙箱前跑 `packs::apply` + `assert_sensitive_ok`。
+- `tauri.conf.json`：`packs/` 加入 bundle resources。
+
+### 铁律 / 安全
+- pack 只写沙箱 `<SANDBOX_HOME>/.claude-science/`，绝不碰真实 `~/.claude-science`。
+- API key（NCBI_API_KEY 等）走 `config.pack_env`（0600 存盘，前端只回显有无），env 注入 MCP 子进程时**只透传 `env_pass` 白名单里的名字**。
+- 审计日志（bio-privacy）只吃 hash + 摘要，`input_sample` 参数 SHA-256 后立即丢弃。
+
+### 未验证
+- Claude Science 的 MCP 配置文件位置与 Skill 目录**尚未从二进制逆向确认**。当前按 Claude Code 惯例落 `<data-dir>/mcp-servers.json` 和 `<data-dir>/skills/<id>/`（见 `packs::MCP_CONFIG_REL` / `SKILLS_REL`）。逆向后只需改这两个常量。
+
 ## [0.3.1] — 2026-07-04
 
 > 主题：**内置预设支持自定义 base_url**。修用户反馈的小米 MiMo「token plan」401。

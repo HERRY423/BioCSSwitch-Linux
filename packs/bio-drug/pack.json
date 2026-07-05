@@ -1,0 +1,13 @@
+{
+  "id": "bio-drug",
+  "name": "药物 / 靶点数据库",
+  "description": "ChEMBL（生物活性化合物）+ Open Targets（靶点-疾病关联）+ RxNorm（药物名称规范化）+ openFDA（FDA 药品标签 / 不良事件）。全部匿名免费。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "servers": [
+    {"name": "bio-drug-chembl", "script": "packs/bio-drug/chembl_server.py"},
+    {"name": "bio-drug-opentargets", "script": "packs/bio-drug/opentargets_server.py"},
+    {"name": "bio-drug-rxnorm", "script": "packs/bio-drug/rxnorm_server.py"},
+    {"name": "bio-drug-openfda", "script": "packs/bio-drug/openfda_server.py"}
+  ]
+}

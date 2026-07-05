@@ -1,0 +1,26 @@
+{
+  "cochrane_query": "((([mh \"Diabetes Mellitus, Type 2\"] OR (\"adults with type 2 diabetes\":ti,ab,kw)) AND (([mh \"Metformin\"] OR (\"metformin monotherapy\":ti,ab,kw)) OR ([mh \"Placebos\"] OR (\"placebo\":ti,ab,kw))) AND ([mh \"Cardiovascular Diseases\"] OR (\"cardiovascular events\":ti,ab,kw))) AND ([pt \"randomized controlled trial\"] OR [pt \"controlled clinical trial\"] OR \"randomized\"[tiab] OR \"randomised\"[tiab])) AND [mh \"Humans\"]",
+  "europepmc_query": "(((MESH:\"Diabetes Mellitus, Type 2\" OR (TITLE:\"adults with type 2 diabetes\" OR ABSTRACT:\"adults with type 2 diabetes\")) AND ((MESH:\"Metformin\" OR (TITLE:\"metformin monotherapy\" OR ABSTRACT:\"metformin monotherapy\")) OR (MESH:\"Placebos\" OR (TITLE:\"placebo\" OR ABSTRACT:\"placebo\"))) AND (MESH:\"Cardiovascular Diseases\" OR (TITLE:\"cardiovascular events\" OR ABSTRACT:\"cardiovascular events\"))) AND (PUB_TYPE:\"randomized controlled trial\" OR PUB_TYPE:\"controlled clinical trial\" OR \"randomized\"[tiab] OR \"randomised\"[tiab])) AND MESH:\"Humans\"",
+  "mesh_lookups": {
+    "comparator": [
+      "Placebos"
+    ],
+    "intervention": [
+      "Metformin"
+    ],
+    "outcome": [
+      "Cardiovascular Diseases"
+    ],
+    "population": [
+      "Diabetes Mellitus, Type 2"
+    ]
+  },
+  "notes": [],
+  "pieces": {
+    "comparator": "(\"Placebos\"[MeSH] OR \"placebo\"[Title/Abstract])",
+    "intervention": "(\"Metformin\"[MeSH] OR \"metformin monotherapy\"[Title/Abstract])",
+    "outcome": "(\"Cardiovascular Diseases\"[MeSH] OR \"cardiovascular events\"[Title/Abstract])",
+    "population": "(\"Diabetes Mellitus, Type 2\"[MeSH] OR \"adults with type 2 diabetes\"[Title/Abstract])"
+  },
+  "query": "(((\"Diabetes Mellitus, Type 2\"[MeSH] OR \"adults with type 2 diabetes\"[Title/Abstract]) AND ((\"Metformin\"[MeSH] OR \"metformin monotherapy\"[Title/Abstract]) OR (\"Placebos\"[MeSH] OR \"placebo\"[Title/Abstract])) AND (\"Cardiovascular Diseases\"[MeSH] OR \"cardiovascular events\"[Title/Abstract])) AND (\"randomized controlled trial\"[pt] OR \"controlled clinical trial\"[pt] OR \"randomized\"[tiab] OR \"randomised\"[tiab])) AND humans[MeSH]"
+}

@@ -1,0 +1,48 @@
+{
+  "chembl": {
+    "active_compounds_pchembl_6": 4200,
+    "pref_name": "Epidermal growth factor receptor erbB1",
+    "target_chembl_id": "CHEMBL203"
+  },
+  "druggability_class": "high",
+  "druggability_class_evidence": "Kinase Tyrosine-protein kinase Receptor Transferase  Belongs to the protein kinase superfamily.",
+  "ensembl_id": "ENSG00000146648",
+  "found": true,
+  "hgnc_id": "HGNC:3236",
+  "name": "epidermal growth factor receptor",
+  "open_targets": {
+    "drug_count": 320,
+    "tractability_flags": [
+      {
+        "label": "Approved Drug",
+        "modality": "SM",
+        "value": true
+      },
+      {
+        "label": "Structure with Ligand",
+        "modality": "SM",
+        "value": true
+      },
+      {
+        "label": "Approved Drug",
+        "modality": "AB",
+        "value": true
+      }
+    ],
+    "unique_drugs": 45
+  },
+  "symbol": "EGFR",
+  "uniprot": {
+    "accession": "P00533",
+    "keywords_head": "Kinase Tyrosine-protein kinase Receptor Transferase"
+  },
+  "verdict": {
+    "grade": "A",
+    "rationale": [
+      "结构类别通常 druggable (+3)",
+      "ChEMBL 里 ≥100 个 pChEMBL≥6 化合物 (+3)",
+      "Open Targets 已知 45 个药物 (+3)",
+      "Open Targets tractability 命中 3 项 (+2)"
+    ]
+  }
+}

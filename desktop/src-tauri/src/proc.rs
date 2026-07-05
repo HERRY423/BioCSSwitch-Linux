@@ -100,6 +100,54 @@ pub fn http_post_status(
         .and_then(|s| s.parse::<u16>().ok())
 }
 
+/// 与 `http_post_status` 相同，但**同时返回响应体**（首块最多 64 KiB，够生医探针评断）。
+/// 用于 bio 探针：不仅看状态码，还要判断响应里有没有 `tool_use` block、JSON schema、长上下文回执等。
+pub fn http_post_status_body(
+    port: u16,
+    secret: Option<&str>,
+    path_suffix: &str,
+    body: &[u8],
+    timeout_ms: u64,
+) -> Option<(Option<u16>, String)> {
+    let addr = ("127.0.0.1", port).to_socket_addrs().ok()?.next()?;
+    let dur = Duration::from_millis(timeout_ms);
+    let mut stream = TcpStream::connect_timeout(&addr, dur).ok()?;
+    let _ = stream.set_read_timeout(Some(dur));
+    let _ = stream.set_write_timeout(Some(dur));
+    let path = match secret {
+        Some(s) if !s.is_empty() => format!("/{s}{path_suffix}"),
+        _ => path_suffix.to_string(),
+    };
+    let req = format!(
+        "POST {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    stream.write_all(body).ok()?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while buf.len() < 65_536 {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+    let head_all = String::from_utf8_lossy(&buf).to_string();
+    let status = head_all
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok());
+    // 分离 body（找 \r\n\r\n 之后的内容）
+    let body_str = match buf.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(i) => String::from_utf8_lossy(&buf[i + 4..]).to_string(),
+        None => head_all,
+    };
+    Some((status, body_str))
+}
+
 /// 向本地回环代理 GET 一段路径（`GET /<secret><path>`），返回 (状态码, 响应体)。
 /// 连不上 / 无响应返回 None。用于经代理回源拉中转站 `/v1/models`——代理有 TLS（urllib），
 /// 这里只打回环明文，无需在 Rust 侧引 TLS。timeout_ms 要给足（代理要转发上游），建议 ~15000。

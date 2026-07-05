@@ -130,3 +130,34 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .btn:focus-visible,.hero:focus-visible,.chip:focus-visible,.abtn:focus-visible,
 .seg-btn:focus-visible,input:focus-visible,select:focus-visible,.link:focus-visible{
   outline:2px solid var(--accent);outline-offset:2px}
+
+/* ─────── 科研工具包 / 隐私 / 任务路由 折叠区 ─────── */
+.packs summary{font-size:12.5px;color:var(--ink);cursor:pointer;list-style:none;font-weight:600}
+.packs summary::-webkit-details-marker{display:none}
+.packs summary::before{content:"▸";font-size:9px;margin-right:5px;color:var(--sub);display:inline-block}
+.packs[open] summary::before{content:"▾"}
+.packlist{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.packrow{padding:6px 8px;background:var(--field);border:1px solid var(--line);border-radius:8px}
+.packchk{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink);cursor:pointer}
+.packchk input{width:auto;height:auto;margin:0}
+.packname{font-weight:600}
+.chip.warn{color:var(--amber);border-color:var(--amber)}
+.packdesc{margin-top:4px;font-size:10.5px;color:var(--sub);line-height:1.45}
+.packadv{margin-top:8px}
+.packadv summary{font-size:11px;color:var(--sub);font-weight:500}
+.packenvlist{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.packenvrow{display:flex;flex-direction:column;gap:4px}
+.packenvlabel{font-size:11px;color:var(--sub)}
+.hostsTa{width:100%;min-height:64px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11.5px;border:1px solid var(--line);background:var(--field);color:var(--ink);
+  border-radius:9px;padding:6px 10px;resize:vertical;-webkit-user-select:text;user-select:text}
+.hostsTa:focus{border-color:var(--accent);background:var(--panel);outline:none}
+.tasklist{margin-top:8px;display:flex;flex-direction:column;gap:10px}
+.taskrow{padding:8px;background:var(--field);border:1px solid var(--line);border-radius:8px}
+.taskhd{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--ink)}
+.taskname{font-weight:600}
+.taskprofile{font-size:11px;color:var(--sub)}
+.taskhint{font-size:10.5px;color:var(--sub);margin:4px 0 6px;line-height:1.45}
+.taskchips{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.verifyRow{display:flex;justify-content:space-between;align-items:center;font-size:12px;
+  margin:4px 0;padding:4px 8px;background:var(--field);border:1px solid var(--line);border-radius:6px}

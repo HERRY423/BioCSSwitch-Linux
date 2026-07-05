@@ -40,7 +40,8 @@
     ],
     "resources": {
       "../../proxy": "proxy",
-      "../../scripts": "scripts"
+      "../../scripts": "scripts",
+      "../../packs": "packs"
     },
     "macOS": {
       "signingIdentity": "-"

@@ -1,0 +1,17 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&email=%3Credacted%3E&retmax=5&retmode=json&term=placebo&tool=%3Credacted%3E",
+    "params_redacted": {
+      "tool": "<redacted>",
+      "email": "<redacted>",
+      "db": "mesh",
+      "term": "placebo",
+      "retmode": "json",
+      "retmax": 5
+    },
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"esearchresult\": {\"count\": \"1\", \"idlist\": [\"68010919\"], \"querytranslation\": \"placebo\"}}"
+}

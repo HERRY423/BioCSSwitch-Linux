@@ -1,0 +1,15 @@
+{
+  "_note": "CSSwitch bio fixture — 脱敏后可入 git，绝不含真实 key",
+  "request": {
+    "method": "GET",
+    "canonical_url": "https://clinicaltrials.gov/api/v2/studies?format=json&pageSize=100&query.cond=non-small+cell+lung+cancer&query.intr=pembrolizumab+OR+nivolumab",
+    "params_redacted": {
+      "format": "json",
+      "pageSize": 100,
+      "query.cond": "non-small cell lung cancer",
+      "query.intr": "pembrolizumab OR nivolumab"
+    },
+    "body_sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  },
+  "response_body": "{\"totalCount\": 2, \"studies\": [{\"protocolSection\": {\"identificationModule\": {\"nctId\": \"NCT01111111\", \"briefTitle\": \"Pembrolizumab in NSCLC Phase 3\"}, \"statusModule\": {\"overallStatus\": \"RECRUITING\"}, \"designModule\": {\"phases\": [\"PHASE3\"], \"studyType\": \"INTERVENTIONAL\", \"enrollmentInfo\": {\"count\": 600}}, \"conditionsModule\": {\"conditions\": [\"Non-small Cell Lung Cancer\"]}, \"armsInterventionsModule\": {\"interventions\": [{\"type\": \"DRUG\", \"name\": \"Pembrolizumab\"}]}, \"sponsorCollaboratorsModule\": {\"leadSponsor\": {\"name\": \"Merck Sharp & Dohme LLC\"}}, \"contactsLocationsModule\": {\"locations\": [{\"facility\": \"Site A\", \"city\": \"Boston\", \"country\": \"United States\", \"status\": \"RECRUITING\"}]}, \"outcomesModule\": {\"primaryOutcomes\": [{\"measure\": \"Overall Survival\"}], \"secondaryOutcomes\": [{\"measure\": \"PFS\"}]}}}, {\"protocolSection\": {\"identificationModule\": {\"nctId\": \"NCT02222222\", \"briefTitle\": \"Nivolumab NSCLC Phase 2\"}, \"statusModule\": {\"overallStatus\": \"COMPLETED\"}, \"designModule\": {\"phases\": [\"PHASE2\"], \"studyType\": \"INTERVENTIONAL\", \"enrollmentInfo\": {\"count\": 120}}, \"conditionsModule\": {\"conditions\": [\"NSCLC\"]}, \"armsInterventionsModule\": {\"interventions\": [{\"type\": \"DRUG\", \"name\": \"Nivolumab\"}]}, \"sponsorCollaboratorsModule\": {\"leadSponsor\": {\"name\": \"Bristol-Myers Squibb\"}}, \"contactsLocationsModule\": {\"locations\": [{\"facility\": \"Site B\", \"city\": \"Paris\", \"country\": \"France\", \"status\": \"COMPLETED\"}]}, \"outcomesModule\": {\"primaryOutcomes\": [{\"measure\": \"Objective Response Rate\"}], \"secondaryOutcomes\": [{\"measure\": \"Overall Survival\"}]}}}], \"nextPageToken\": null}"
+}
