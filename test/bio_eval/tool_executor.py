@@ -42,7 +42,9 @@ _SERVER_MODULE_PATHS = [
     "bio-privacy/phi_server.py",
     "bio-compiler/question_compiler_server.py",
     "bio-singlecell/singlecell_server.py",
+    "bio-sc-downstream/sc_downstream_server.py",
     "bio-scfm/scfm_server.py",
+    "bio-sc-atlas/atlas_server.py",
 ]
 
 

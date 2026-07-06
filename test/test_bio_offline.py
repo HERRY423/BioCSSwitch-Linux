@@ -405,6 +405,92 @@ def test_scfm_provenance():
     check("保留 scVI/totalVI/MultiVI baseline", {"scvi", "totalvi", "multivi"} <= base)
 
 
+def test_singlecell_recipe_expansion():
+    """单细胞 Phase 1/4：doublet、batch、gene ID、cell type、多模态、空间配方（离线）。"""
+    print("[bio-singlecell expanded recipes]")
+    sc = _load_server("bio-singlecell/singlecell_server.py")
+    dbl = sc.sc_doublet_recipe(n_obs=5000)
+    check("doublet recipe 有稳定 hash", dbl["recipe_hash"].startswith("sha256:"))
+    check("doublet 默认 Scrublet 脚本含 histogram", "doublet_score" in dbl["script"] and "hist" in dbl["script"])
+    prep = sc.sc_preprocess_recipe(target_model="generic")
+    check("preprocess seurat_v3 HVG 使用 counts layer", "flavor='seurat_v3', layer='counts'" in prep["script"])
+    bat = sc.sc_batch_recipe(n_batches=3, batch_key="batch")
+    check("≤3 batch 推荐 Harmony", bat["recommended_method"] == "harmony")
+    bat2 = sc.sc_batch_recipe(n_batches=6, method="scvi")
+    check("scVI 警告 raw counts", any("raw counts" in w for w in bat2["warnings"]))
+    check("scVI 脚本不静默把 X 当 counts", "requires raw counts" in bat2["script"] and "adata.X.copy()" not in bat2["script"])
+    gid = sc.sc_geneid_convert(source_id_type="symbol", target_id_type="ensembl", organism="human")
+    check("geneid_convert 警告多对多映射", any("多对一" in p or "多对多" in p for p in gid["pitfalls"]))
+    ann = sc.sc_celltype_recipe(method="celltypist", tissue="PBMC", organism="human")
+    check("celltype 按 tissue 推荐 CellTypist immune model", "Immune" in ann["recommended_reference"])
+    mm = sc.sc_multimodal_recipe(modality="cite_seq")
+    check("CITE-seq 配方含 CLR/DSB/totalVI", all(x in " ".join(mm["notes"]) + mm["script"] for x in ("CLR", "DSB", "totalVI")))
+    check("CITE-seq HVG 使用 RNA counts layer", 'layer="counts"' in mm["script"])
+    sp = sc.sc_spatial_recipe(platform="visium")
+    check("spatial 配方含 squidpy spatial neighbors", "spatial_neighbors" in sp["script"])
+    check("spatial 先生成 leiden 再 neighborhood enrichment", "sc.tl.leiden" in sp["script"] and 'cluster_key="leiden"' in sp["script"])
+
+
+def test_sc_downstream_recipes():
+    """单细胞 Phase 2：下游分析 pack 工具结构与关键约束（离线）。"""
+    print("[bio-sc-downstream recipes]")
+    ds = _load_server("bio-sc-downstream/sc_downstream_server.py")
+    deg = ds.sc_deg_recipe(method="auto", replicates_per_condition=3)
+    check("DEG auto 推荐 pseudobulk", deg["recommended_method"] == "pseudobulk_deseq2")
+    check("pseudobulk 脚本含 DESeq2/apeglm", "DESeq2" in deg["script"] and "apeglm" in deg["script"])
+    check("pseudobulk 脚本逐 cell type 聚合且无未定义占位变量",
+          "for (ct in sort(unique(pb_meta$celltype)))" in deg["script"] and "counts_for_one_celltype" not in deg["script"])
+    traj = ds.sc_trajectory_recipe(method="scvelo", has_spliced_unspliced=False)
+    check("scVelo 缺 spliced/unspliced 有警告", any("spliced/unspliced" in w for w in traj["warnings"]))
+    paga = ds.sc_trajectory_recipe(method="paga")
+    check("PAGA 缺邻居图时自动补 neighbors", "if \"neighbors\" not in adata.uns" in paga["script"] and "sc.pp.neighbors" in paga["script"])
+    comm = ds.sc_communication_recipe(method="liana")
+    check("communication 输出可视化说明", "bubble plot" in comm["visualizations"])
+    marker = ds.sc_marker_recipe()
+    check("marker 配方含 HGNC handoff", "HGNC" in marker["bio_gene_handoff"])
+    enr = ds.sc_enrichment_recipe(method="decoupler")
+    check("enrichment 配方含 gene set scoring 边界", any("gene set scoring" in s for s in enr["single_cell_specifics"]))
+
+
+def test_scfm_phase3_tools():
+    """scFM Phase 3：fine-tuning skeleton、quality metrics、CellFM/UCE prep（离线）。"""
+    print("[bio-scfm phase3]")
+    fm = _load_server("bio-scfm/scfm_server.py")
+    ft = fm.scfm_finetune_plan(model="geneformer", label_key="cell_type")
+    check("fine-tuning skeleton runnable=False", ft["runnable"] is False and ft["artifact_type"] == "skeleton")
+    check("fine-tuning 脚本含 SystemExit 护栏", "SystemExit" in ft["script"])
+    q = fm.scfm_embed_quality(scenario="comprehensive")
+    check("embed quality 指标完整", {"kBET", "iLISI", "cLISI", "ARI"} <= set(q["metrics"]))
+    ext = fm.scfm_preprocess_recipe_ext(model="uce", input_id_type="ensembl")
+    check("UCE 预处理含 protein/ESM2", "ESM2" in ext["script"] and "protein" in ext["script"])
+
+
+def test_sc_atlas_and_scanpy_generator():
+    """CELLxGENE 轻量 pack + scanpy 生成器（离线）。"""
+    print("[bio-sc-atlas + sc_scanpy_pipeline]")
+    atlas = _load_server("bio-sc-atlas/atlas_server.py")
+    srch = atlas.cellxgene_search(tissue="lung", organism="Homo sapiens")
+    check("cellxgene_search 返回 query_hash", srch["query_hash"].startswith("sha256:"))
+    dl = atlas.cellxgene_download_recipe(dataset_id="fake-dataset")
+    check("cellxgene download 是 skeleton 且不可运行", dl["runnable"] is False and "SystemExit" in dl["script"])
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        out_script = Path(td) / "scanpy_pipeline.py"
+        out = subprocess.run(
+            [sys.executable, str(_ROOT / "packs" / "bio-workflows" / "generators" / "sc_scanpy_pipeline.py"),
+             "--h5ad", "input.h5ad", "--organism", "human", "--tissue", "blood",
+             "--analysis-goals", "clustering", "marker", "--out", str(out_script),
+             "--include-doublet", "--batch-key", "batch"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        check("sc_scanpy_pipeline generator 可生成脚本", out.returncode == 0 and out_script.is_file(),
+              detail=out.stdout[-200:] + out.stderr[-200:])
+        script = out_script.read_text("utf-8") if out_script.is_file() else ""
+        check("生成脚本含 provenance / Leiden / marker", all(x in script for x in ("csswitch_scanpy_pipeline", "leiden", "rank_genes_groups")))
+        check("生成脚本保留 full-gene raw 并用 counts 做 HVG",
+              "adata.raw = adata.copy()" in script and 'layer="counts"' in script and "use_raw=True" in script)
+
+
 def test_privacy_partial_leak():
     """修复 3：隐私红队片段泄露检测 —— 后四位/前三后三/身份证生日段/MRN 片段都算泄露。"""
     print("[privacy partial leak]")
@@ -433,6 +519,10 @@ def main() -> int:
     test_gold_calibration_manifest()
     test_grade_engine()
     test_scfm_provenance()
+    test_singlecell_recipe_expansion()
+    test_sc_downstream_recipes()
+    test_scfm_phase3_tools()
+    test_sc_atlas_and_scanpy_generator()
     test_privacy_partial_leak()
     print()
     if _fails:

@@ -10,6 +10,7 @@
 | `ct_landscape.py` | 临床试验 landscape / 竞争情报 | Markdown 报告：phase×status 矩阵 + endpoint 频率 + sponsor / 地理分布 + NCT 清单 |
 | `td_druggability.py` | 靶点 druggability 评级 | 评分卡：结构类别 + ChEMBL 活性 + Open Targets 药物 → A/B/C/D 评级 + 可核对链接 |
 | `omics_deseq2.py` | RNA-seq DEG + GSEA | R 脚本（DESeq2 + apeglm + clusterProfiler + Hallmark GSEA），含 QC / volcano / heatmap / batch 自动处理 |
+| `sc_scanpy_pipeline.py` | scRNA-seq scanpy 全流程 | Python 脚本（QC → preprocess → PCA/neighbors/UMAP/Leiden → marker），可选 doublet / Harmony hook，含 provenance JSON |
 
 ## 设计原则
 
@@ -37,6 +38,7 @@
 - `trial-landscape` Skill → 建议 `ct_landscape`
 - `target-discovery` Skill → 建议 `td_druggability`
 - `geo-triage` Skill → 建议 `omics_deseq2`（DEG 阶段）
+- `sc-analysis` Skill → 建议 `sc_scanpy_pipeline`（scanpy 全流程骨架）
 
 在 Skill 文本里让 LLM **说清楚"下一步请跑这个脚本"**，把生成检索式 / 分析代码的责任外包给确定性工具。
 

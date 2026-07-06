@@ -21,6 +21,8 @@ packs/
   bio-compiler/         # 研究问题编译器：模糊问题 → 结构化研究任务书 + 工具链路由
   bio-singlecell/       # 单细胞预处理 + AnnData 指纹（scFM 的可复现输入层）
   bio-scfm/             # Geneformer / scGPT 计算工具适配层 + embedding provenance
+  bio-sc-downstream/    # 单细胞下游分析配方（DEG / trajectory / communication / marker / enrichment）
+  bio-sc-atlas/         # CELLxGENE Census / Discover 轻量检索与下载 skeleton
 
   <pack>/pack.json      # 每个 pack 的 manifest
 ```
@@ -208,12 +210,14 @@ python test/bio_eval/run.py --summary     # 汇总所有 profile 历史
 
 **EtD 层（`etd_recommendation`）**：确定性 ≠ 推荐。要不要推荐、多强（strong / conditional），还要看获益/危害平衡、价值观与偏好、资源/成本、公平性/可接受性/可行性。工具把这些判断确定性地映射成推荐方向（for/against）+ 强度，守卫"低确定性上的强推荐"（属 GRADE 不一致推荐，需符合 5 类特殊情形否则降 conditional），措辞遵循 GRADE 惯例：strong→"we recommend"，conditional→"we suggest"。
 
-## 单细胞基础模型适配层（bio-singlecell + bio-scfm）
+## 单细胞分析适配层（bio-singlecell + bio-scfm + bio-sc-downstream + bio-sc-atlas）
 
 把 Geneformer / scGPT 当**计算工具**（表达谱→embedding 的编码器）用，不是当聊天模型。核心铁律：**任何 embedding 必须可复现**，输入输出全程记 provenance。哲学同 generators——工具产出「可复现脚本 + provenance 记录」，重活（GPU 上跑模型）在用户机器上，中间对象落用户磁盘。
 
-- **bio-singlecell**（喂数据前的标准化 + 追溯层）：`anndata_fingerprint`（元数据指纹 + 生成算真·内容哈希的本地代码片段；同一份数据在任何机器上指纹一致）、`sc_preprocess_recipe`（模型对口的确定性 scanpy 配方 + `recipe_hash` + 脚本——Geneformer 走 rank-value 跳过 log/HVG，scGPT 走 HVG+value binning）、`sc_qc_thresholds`（MAD-based 可解释阈值，返回"剔除谁、凭什么"）。
-- **bio-scfm**（编码器适配）：`scfm_registry` / `scfm_model_matrix`（模型矩阵）、`scfm_embed_plan`（产出 embedding **skeleton**：`runnable=false`、脚本带 NOT-RUNNABLE 横幅 + `raise SystemExit` 护栏 + TODO/伪代码——**不是可直接运行的脚本**）、`scfm_provenance_record`（构造带 `provenance_hash` 的规范记录）、`scfm_provenance_verify`（重算哈希 + 查必填 → trustworthy / not_reproducible）。
+- **bio-singlecell**（喂数据前的标准化 + 追溯层）：`anndata_fingerprint`（元数据指纹 + 生成算真·内容哈希的本地代码片段；同一份数据在任何机器上指纹一致）、`sc_preprocess_recipe`（模型对口的确定性 scanpy 配方 + `recipe_hash` + 脚本——Geneformer 走 rank-value 跳过 log/HVG，scGPT 走 HVG+value binning）、`sc_qc_thresholds`（MAD-based 可解释阈值），以及 `sc_doublet_recipe` / `sc_batch_recipe` / `sc_geneid_convert` / `sc_celltype_recipe` / `sc_multimodal_recipe` / `sc_spatial_recipe`。
+- **bio-scfm**（编码器适配）：`scfm_registry` / `scfm_model_matrix`（模型矩阵）、`scfm_embed_plan`（产出 embedding **skeleton**：`runnable=false`、脚本带 NOT-RUNNABLE 横幅 + `raise SystemExit` 护栏 + TODO/伪代码——**不是可直接运行的脚本**）、`scfm_finetune_plan`（Geneformer/scGPT fine-tuning skeleton）、`scfm_embed_quality`（kBET/iLISI/cLISI/silhouette/NMI/ARI/scIB 配方）、`scfm_preprocess_recipe_ext`（CellFM/UCE 专用预处理）、`scfm_provenance_record` / `scfm_provenance_verify`。
+- **bio-sc-downstream**（embedding/注释之后的分析配方）：`sc_deg_recipe`（pseudobulk DESeq2 / Wilcoxon / MAST）、`sc_trajectory_recipe`（scVelo / PAGA / DPT / Monocle3）、`sc_communication_recipe`（CellChat / LIANA / NicheNet）、`sc_marker_recipe`、`sc_enrichment_recipe`。它依赖 `bio-singlecell`，但单独成 pack，便于用户按需启用。
+- **bio-sc-atlas**（轻量图谱检索）：`cellxgene_search` / `cellxgene_dataset_info` / `cellxgene_download_recipe`。默认只做元数据计划和下载 skeleton，不把 `cellxgene-census` SDK 作为 pack 运行依赖。
 
 **模型矩阵**：4 个预训练 **foundation model**（Geneformer / scGPT / CellFM / UCE）+ 3 个 **domain-specific baseline**（scVI / totalVI / MultiVI，每份数据自训 VAE，非预训练）。保留 baseline 是为**诚实对照**——跑 foundation model 时至少配一个 baseline，否则无法判断 foundation 的 embedding 是不是真比自训 VAE 强。各模型标 `category` / 输入 ID 类型 / 模态（totalVI=RNA+ADT，MultiVI=RNA+ATAC）。
 

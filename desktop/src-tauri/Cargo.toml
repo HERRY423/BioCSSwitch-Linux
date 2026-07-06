@@ -1,8 +1,8 @@
 [package]
 name = "desktop"
-version = "0.3.2"
-description = "CSSwitch 菜单栏 app（进程管家 + 配置面板）"
-authors = ["CSSwitch"]
+version = "0.3.3"
+description = "BioCSSwitch 桌面 app（进程管家 + 生物医学科研工具包配置面板）"
+authors = ["BioCSSwitch"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

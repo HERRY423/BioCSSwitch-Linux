@@ -1,4 +1,4 @@
-//! CSSwitch 桌面 app 后端（进程管家）。
+//! BioCSSwitch 桌面 app 后端（进程管家）。
 //!
 //! 职责：管理「翻译代理」与「沙箱 Science」两个子进程的生命周期；读写
 //! `~/.csswitch/config.json`（多 profile 形态）；把第三方 key 以【环境变量】注入代理子进程
@@ -1876,13 +1876,13 @@ fn app_version() -> String {
 /// 打开 GitHub Releases 页（检查更新时用系统浏览器打开，浏览器走用户自己的代理）。
 #[tauri::command]
 fn open_release_page() -> Result<(), String> {
-    open_in_browser("https://github.com/SuperJJ007/CSSwitch/releases/latest")
+    open_in_browser("https://github.com/HERRY423/BioCSSwitch/releases/latest")
 }
 
 /// 打开「报 bug」页（预填 bug 模板）；用系统浏览器，走用户自己的代理。
 #[tauri::command]
 fn report_bug() -> Result<(), String> {
-    open_in_browser("https://github.com/SuperJJ007/CSSwitch/issues/new?template=bug_report.yml")
+    open_in_browser("https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml")
 }
 
 /// 在访达里打开日志目录 `~/.csswitch/logs`，方便用户附到 bug 反馈里（先自查有无密钥）。

@@ -1,8 +1,8 @@
 {
   "id": "bio-scfm",
   "name": "单细胞基础模型适配层（Geneformer / scGPT）",
-  "description": "把 Geneformer / scGPT 当计算工具（表达谱→embedding 的编码器）而非聊天模型。铁律：任何 embedding 必须附 provenance——输入 AnnData 内容哈希、预处理参数哈希、模型版本/checkpoint、embedding 维度/输出哈希/pooling、运行环境与 seed。适配层产出可复现运行脚本 + provenance 骨架，钉死版本、锁死记录结构、算对哈希；模型在用户机器上跑。",
-  "version": "0.1.0",
+  "description": "把 Geneformer / scGPT / CellFM / UCE 当计算工具（表达谱→embedding 的编码器）而非聊天模型。铁律：任何 embedding 或 fine-tuning 必须附 provenance。适配层产出可复现运行 skeleton、fine-tuning skeleton、embedding 质量评估配方、CellFM/UCE 专用预处理配方与 provenance 骨架；模型在用户机器上跑。",
+  "version": "0.2.0",
   "requires_env": [],
   "optional_env": [],
   "depends_on": ["bio-singlecell"],

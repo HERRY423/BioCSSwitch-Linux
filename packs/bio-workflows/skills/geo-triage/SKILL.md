@@ -1,6 +1,6 @@
 ---
 name: geo-triage
-description: 用于 GEO / SRA 公共转录组数据集的初筛与二次分析规划——选数据集、差异表达、富集分析、通路注释。触发：GEO 数据集、GSE、公共转录组、bulk RNA-seq 分析、differential expression、DEG 分析、GSEA、富集分析、pathway enrichment、KEGG、GO 富集、reanalyze GEO、找一个数据集来验证、公共数据验证我的假设、reanalysis of public data。禁用于：单细胞（scRNA-seq）分析——那需要 Seurat/Scanpy 全流程，本 skill 不覆盖。
+description: 用于 GEO / SRA 公共转录组数据集的初筛与二次分析规划——选数据集、差异表达、富集分析、通路注释。触发：GEO 数据集、GSE、公共转录组、bulk RNA-seq 分析、differential expression、DEG 分析、GSEA、富集分析、pathway enrichment、KEGG、GO 富集、reanalyze GEO、找一个数据集来验证、公共数据验证我的假设、reanalysis of public data。禁用于：单细胞（scRNA-seq）分析——请交给 sc-analysis skill，再由 single-cell-prep / sc-downstream-analysis 接手。
 ---
 
 # GEO 数据集初筛与分析规划（geo-triage）
@@ -79,9 +79,17 @@ sig <- res[which(res$padj < 0.05 & abs(res$log2FoldChange) >= 1), ]
 
 用户："GSE12345 的 DEG 是什么？" 你不查数据就编 5 个 gene symbol —— 严禁。GEO 具体的 processed matrix 不在 CSSwitch 里，你只有 metadata。DEG 让用户自己跑（脚本你给）。
 
+## 单细胞交接
+
+如果用户的问题明确是 scRNA-seq、10x Genomics、Scanpy/Seurat、单细胞 DEG、单细胞轨迹、RNA velocity 或细胞通信，不要继续用本 skill。请切到 `sc-analysis`：
+
+1. 前置 QC / doublet / batch / cell type annotation → `single-cell-prep`
+2. scFM embedding / fine-tuning / embedding quality → `scfm-embed`
+3. DEG / trajectory / communication / marker / enrichment → `sc-downstream-analysis`
+
 ## 边界
 
-- 单细胞 scRNA-seq、空间转录组、metabolomics 不在本 skill 覆盖。
+- 单细胞 scRNA-seq、空间转录组、metabolomics 不在本 skill 覆盖；单细胞请用 `sc-analysis`。
 - SRA 原始 fastq 需要用户自己拉（`prefetch` / `fasterq-dump`），本 skill 不代跑。
 
 

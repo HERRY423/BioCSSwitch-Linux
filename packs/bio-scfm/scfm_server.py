@@ -19,6 +19,9 @@ embedding 的编码器；它们没有"意见"，只有确定性的数值输出�
 工具：
   scfm_registry           — 已钉版本的 Geneformer / scGPT checkpoint + 输入要求
   scfm_embed_plan         — 产出 embedding 运行脚本 + provenance 骨架
+  scfm_finetune_plan      — Geneformer / scGPT fine-tuning skeleton + provenance 骨架
+  scfm_embed_quality      — embedding 质量度量配方（batch mixing / bio conservation / scIB）
+  scfm_preprocess_recipe_ext — CellFM / UCE 专用预处理配方
   scfm_provenance_record  — 构造带 content hash 的规范 provenance 记录
   scfm_provenance_verify  — 重算哈希 + 校验必填字段完整性（把"没记全"暴露出来）
 """
@@ -36,7 +39,7 @@ from _lib import provenance as prov  # noqa: E402
 from _lib.server import MCPServer  # noqa: E402
 
 
-server = MCPServer("bio-scfm", "0.1.0")
+server = MCPServer("bio-scfm", "0.2.0")
 
 PROVENANCE_SCHEMA = "bio-scfm/embedding-provenance/1"
 
@@ -327,6 +330,285 @@ def _render_embed_script(model: str, ckpt: str, out_layer: str, seed: int,
         f'adata.write_h5ad("embedded_{model}.h5ad")',
     ]
     return "\n".join(banner + body + tail)
+
+
+@server.tool(
+    "scfm_finetune_plan",
+    "Produce a NOT-RUNNABLE fine-tuning skeleton for Geneformer or scGPT. It includes train/val/test split, "
+    "hyperparameter suggestions, metric code, and fine-tuning provenance fields. The script starts with a "
+    "SystemExit guard and must be completed against the current official API before running.",
+    {
+        "type": "object",
+        "properties": {
+            "model": {"type": "string", "enum": ["geneformer", "scgpt"]},
+            "task_type": {"type": "string", "enum": ["cell_classification", "cell_type_annotation"], "default": "cell_classification"},
+            "label_key": {"type": "string", "default": "cell_type"},
+            "n_cells": {"type": "integer", "default": 0},
+            "train_fraction": {"type": "number", "default": 0.8},
+            "val_fraction": {"type": "number", "default": 0.1},
+            "seed": {"type": "integer", "default": 0},
+        },
+        "required": ["model"],
+    },
+)
+def scfm_finetune_plan(
+    model: str,
+    task_type: str = "cell_classification",
+    label_key: str = "cell_type",
+    n_cells: int = 0,
+    train_fraction: float = 0.8,
+    val_fraction: float = 0.1,
+    seed: int = 0,
+):
+    model = model.lower()
+    if model not in {"geneformer", "scgpt"}:
+        return {"error": f"unsupported fine-tuning model: {model}", "supported": ["geneformer", "scgpt"]}
+    params = {
+        "model": model,
+        "task_type": task_type,
+        "label_key": label_key,
+        "n_cells": n_cells,
+        "train_fraction": train_fraction,
+        "val_fraction": val_fraction,
+        "seed": seed,
+    }
+    plan_hash = prov.content_hash({"tool": "scfm_finetune_plan", "params": params})
+    hparams = _finetune_hparams(model, n_cells)
+    return {
+        "plan_hash": plan_hash,
+        "artifact_type": "skeleton",
+        "runnable": False,
+        "params": params,
+        "hyperparameters": hparams,
+        "script": _render_finetune_script(model, task_type, label_key, hparams, train_fraction, val_fraction, seed),
+        "provenance_skeleton": {
+            "schema": "bio-scfm/finetune-provenance/1",
+            "plan_hash": plan_hash,
+            "model": {"name": model, "checkpoint": "<FILL>", "version": "<FILL>", "commit": "<FILL>"},
+            "dataset": {"anndata_sha256": "<FILL>", "split_hash": "<FILL>", "label_key": label_key},
+            "training": {"hyperparameters": hparams, "train_curve_sha256": "<FILL>", "best_checkpoint_sha256": "<FILL>"},
+            "metrics": {"accuracy": "<FILL>", "macro_f1": "<FILL>", "confusion_matrix_sha256": "<FILL>"},
+        },
+        "warnings": [
+            "这是 fine-tuning skeleton，不是可直接运行脚本；必须核对官方 API 并删除 SystemExit 护栏。",
+            "fine-tuning 必须记录训练集哈希、split、超参、训练曲线、最佳 checkpoint 和评估指标。",
+        ],
+    }
+
+
+def _finetune_hparams(model: str, n_cells: int) -> Dict[str, Any]:
+    small = n_cells and n_cells < 20_000
+    if model == "geneformer":
+        return {
+            "learning_rate": 5e-5 if small else 2e-5,
+            "epochs": 5 if small else 3,
+            "batch_size": 8 if small else 16,
+            "warmup_ratio": 0.05,
+            "weight_decay": 0.01,
+            "early_stopping": "monitor macro_f1 on validation",
+        }
+    return {
+        "learning_rate": 1e-4 if small else 5e-5,
+        "epochs": 10 if small else 5,
+        "batch_size": 32 if small else 64,
+        "warmup_ratio": 0.05,
+        "weight_decay": 0.01,
+        "early_stopping": "monitor macro_f1 on validation",
+    }
+
+
+def _render_finetune_script(
+    model: str,
+    task_type: str,
+    label_key: str,
+    hparams: Dict[str, Any],
+    train_fraction: float,
+    val_fraction: float,
+    seed: int,
+) -> str:
+    return f'''# {"=" * 68}
+# SKELETON —— NOT RUNNABLE AS-IS
+# Fine-tuning APIs change quickly. Pin package versions, fill TODOs, verify
+# the official {model} API, then delete the SystemExit guard below.
+# {"=" * 68}
+raise SystemExit("SKELETON: fill TODOs, pin versions, verify official API, then remove this guard")
+
+import json
+import numpy as np
+import scanpy as sc
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.model_selection import train_test_split
+
+np.random.seed({seed})
+adata = sc.read_h5ad("embedded_or_preprocessed.h5ad")
+assert "{label_key}" in adata.obs, "missing label_key for supervised fine-tuning"
+
+idx = np.arange(adata.n_obs)
+train_idx, tmp_idx = train_test_split(idx, train_size={train_fraction}, random_state={seed}, stratify=adata.obs["{label_key}"])
+val_size = {val_fraction} / (1 - {train_fraction})
+val_idx, test_idx = train_test_split(tmp_idx, train_size=val_size, random_state={seed}, stratify=adata.obs["{label_key}"].iloc[tmp_idx])
+
+hyperparameters = {hparams!r}
+# TODO {model}: tokenize / build Dataset / load checkpoint for task={task_type}
+# TODO: train with hyperparameters above and save best checkpoint
+# TODO: predict on test set
+y_true = adata.obs["{label_key}"].iloc[test_idx].to_numpy()
+y_pred = np.array(["<FILL>"] * len(test_idx))
+metrics = {{
+    "accuracy": float(accuracy_score(y_true, y_pred)),
+    "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
+    "confusion_matrix": confusion_matrix(y_true, y_pred).tolist(),
+}}
+json.dump(metrics, open("finetune_metrics.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+'''
+
+
+@server.tool(
+    "scfm_embed_quality",
+    "Generate an embedding quality recipe. Scenarios: batch_mixing, bio_conservation, comprehensive. "
+    "Includes kBET/iLISI/graph connectivity and cLISI/silhouette/NMI/ARI/scIB-style metrics plus UMAP/radar plot hooks.",
+    {
+        "type": "object",
+        "properties": {
+            "scenario": {"type": "string", "enum": ["batch_mixing", "bio_conservation", "comprehensive"], "default": "comprehensive"},
+            "embedding_key": {"type": "string", "default": "X_geneformer"},
+            "batch_key": {"type": "string", "default": "batch"},
+            "celltype_key": {"type": "string", "default": "cell_type"},
+            "seed": {"type": "integer", "default": 0},
+        },
+    },
+)
+def scfm_embed_quality(
+    scenario: str = "comprehensive",
+    embedding_key: str = "X_geneformer",
+    batch_key: str = "batch",
+    celltype_key: str = "cell_type",
+    seed: int = 0,
+):
+    metrics = {
+        "batch_mixing": ["kBET", "iLISI", "graph_connectivity"],
+        "bio_conservation": ["cLISI", "silhouette_celltype", "NMI", "ARI"],
+        "comprehensive": ["kBET", "iLISI", "graph_connectivity", "cLISI", "silhouette_celltype", "NMI", "ARI", "scIB_benchmark"],
+    }[scenario]
+    params = {"scenario": scenario, "embedding_key": embedding_key, "batch_key": batch_key, "celltype_key": celltype_key, "seed": seed}
+    recipe_hash = prov.content_hash({"tool": "scfm_embed_quality", "params": params})
+    return {
+        "recipe_hash": recipe_hash,
+        "params": params,
+        "metrics": metrics,
+        "script": _render_quality_script(metrics, embedding_key, batch_key, celltype_key, seed),
+        "provenance_attachment": {
+            "schema": "bio-scfm/embedding-quality/1",
+            "embedding_provenance_hash": "<FILL: scfm_provenance_record.provenance_hash>",
+            "quality_recipe_hash": recipe_hash,
+            "metrics_json_sha256": "<FILL after run>",
+        },
+        "visualizations": ["UMAP colored by batch/celltype", "metric radar chart", "batch vs biology tradeoff table"],
+    }
+
+
+def _render_quality_script(metrics: List[str], embedding_key: str, batch_key: str, celltype_key: str, seed: int) -> str:
+    return f'''# scFM embedding quality recipe
+import json
+import numpy as np
+import scanpy as sc
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, silhouette_score
+
+np.random.seed({seed})
+adata = sc.read_h5ad("embedded.h5ad")
+assert "{embedding_key}" in adata.obsm, "missing embedding"
+X = adata.obsm["{embedding_key}"]
+
+results = {{}}
+if "{batch_key}" in adata.obs:
+    # TODO: kBET / iLISI require scIB or scib-metrics; install in user env.
+    results["kBET"] = "<FILL via scIB>"
+    results["iLISI"] = "<FILL via scIB>"
+    results["graph_connectivity"] = "<FILL via scIB>"
+if "{celltype_key}" in adata.obs:
+    labels = adata.obs["{celltype_key}"].astype(str).to_numpy()
+    if len(set(labels)) > 1:
+        results["silhouette_celltype"] = float(silhouette_score(X, labels))
+    results["cLISI"] = "<FILL via scIB>"
+    # If clusters exist, compare them to labels.
+    if "leiden" in adata.obs:
+        results["NMI"] = float(normalized_mutual_info_score(labels, adata.obs["leiden"].astype(str)))
+        results["ARI"] = float(adjusted_rand_score(labels, adata.obs["leiden"].astype(str)))
+
+json.dump({{"requested_metrics": {metrics!r}, "results": results}}, open("embedding_quality_metrics.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+sc.pp.neighbors(adata, use_rep="{embedding_key}")
+sc.tl.umap(adata)
+sc.pl.umap(adata, color=[c for c in ["{batch_key}", "{celltype_key}", "leiden"] if c in adata.obs], save="_embedding_quality.png")
+'''
+
+
+@server.tool(
+    "scfm_preprocess_recipe_ext",
+    "Generate CellFM or UCE-specific preprocessing recipes missing from generic bio-singlecell prep. "
+    "CellFM aligns to model gene vocabulary; UCE maps genes to Ensembl protein IDs / ESM2 protein embeddings.",
+    {
+        "type": "object",
+        "properties": {
+            "model": {"type": "string", "enum": ["cellfm", "uce"]},
+            "organism": {"type": "string", "default": "human"},
+            "input_id_type": {"type": "string", "enum": ["symbol", "ensembl", "entrez"], "default": "symbol"},
+            "seed": {"type": "integer", "default": 0},
+        },
+        "required": ["model"],
+    },
+)
+def scfm_preprocess_recipe_ext(model: str, organism: str = "human", input_id_type: str = "symbol", seed: int = 0):
+    model = model.lower()
+    if model not in {"cellfm", "uce"}:
+        return {"error": f"unsupported extended preprocessing model: {model}", "supported": ["cellfm", "uce"]}
+    params = {"model": model, "organism": organism, "input_id_type": input_id_type, "seed": seed}
+    recipe_hash = prov.content_hash({"tool": "scfm_preprocess_recipe_ext", "params": params})
+    return {
+        "recipe_hash": recipe_hash,
+        "params": params,
+        "script": _render_ext_preprocess(model, organism, input_id_type, seed),
+        "provenance_skeleton": {
+            "schema": "bio-scfm/preprocess-ext/1",
+            "recipe_hash": recipe_hash,
+            "model": model,
+            "input": {"anndata_sha256": "<FILL>", "input_id_type": input_id_type},
+            "mapping": {"gene_vocab_sha256": "<FILL>", "unmatched_genes_tsv_sha256": "<FILL>"},
+        },
+        "notes": [
+            "CellFM：重点是对齐模型基因词表，并记录 missing / duplicated genes。",
+            "UCE：重点是 Ensembl protein ID 映射、ESM2 protein embedding 和物种信息注入。",
+        ],
+    }
+
+
+def _render_ext_preprocess(model: str, organism: str, input_id_type: str, seed: int) -> str:
+    if model == "cellfm":
+        return f'''# CellFM-specific preprocessing skeleton
+import numpy as np
+import pandas as pd
+import scanpy as sc
+np.random.seed({seed})
+adata = sc.read_h5ad("preprocessed.h5ad")
+vocab = pd.read_csv("cellfm_gene_vocab.tsv", sep="\\t")  # official vocab/checkpoint-specific
+# input id type: {input_id_type}; organism: {organism}
+# TODO: map adata.var_names to vocab, preserve unmatched/duplicated audit tables
+adata = adata[:, [g for g in adata.var_names if g in set(vocab["gene_id"])]].copy()
+adata.write_h5ad("cellfm_ready.h5ad")
+'''
+    return f'''# UCE-specific preprocessing skeleton
+import numpy as np
+import pandas as pd
+import scanpy as sc
+np.random.seed({seed})
+adata = sc.read_h5ad("preprocessed.h5ad")
+# input id type: {input_id_type}; organism: {organism}
+# TODO: map genes -> Ensembl protein IDs (ENSP) and join official ESM2 protein embeddings
+protein_map = pd.read_csv("gene_to_ensembl_protein.tsv", sep="\\t")
+esm2 = pd.read_parquet("uce_esm2_gene_embeddings.parquet")
+# TODO: build UCE input tensors with species metadata and expression matrix
+adata.uns["uce_preprocess"] = {{"organism": "{organism}", "input_id_type": "{input_id_type}"}}
+adata.write_h5ad("uce_ready.h5ad")
+'''
 
 
 _REQUIRED_PROVENANCE = [

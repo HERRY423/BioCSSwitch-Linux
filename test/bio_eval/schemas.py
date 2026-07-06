@@ -237,6 +237,182 @@ SCHEMAS: Dict[str, Dict[str, Any]] = {
             "required": ["text"],
         },
     },
+    "anndata_fingerprint": {
+        "name": "anndata_fingerprint",
+        "description": "Fingerprint an AnnData descriptor and return a true content hash snippet",
+        "input_schema": {
+            "type": "object",
+            "properties": {"descriptor": {"type": "object"}, "hash_layer": {"type": "string"}},
+            "required": ["descriptor"],
+        },
+    },
+    "sc_qc_thresholds": {
+        "name": "sc_qc_thresholds",
+        "description": "Suggest MAD-based single-cell QC thresholds",
+        "input_schema": {
+            "type": "object",
+            "properties": {"stats": {"type": "object"}, "n_mads": {"type": "number"}},
+            "required": ["stats"],
+        },
+    },
+    "sc_preprocess_recipe": {
+        "name": "sc_preprocess_recipe",
+        "description": "Generate a deterministic scanpy preprocessing recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"target_model": {"type": "string"}, "overrides": {"type": "object"}, "seed": {"type": "integer"}},
+        },
+    },
+    "sc_doublet_recipe": {
+        "name": "sc_doublet_recipe",
+        "description": "Generate Scrublet/scDblFinder doublet detection recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"n_obs": {"type": "integer"}, "expected_doublet_rate": {"type": "number"}, "method": {"type": "string"}},
+            "required": ["n_obs"],
+        },
+    },
+    "sc_batch_recipe": {
+        "name": "sc_batch_recipe",
+        "description": "Generate batch integration recipe and method guidance",
+        "input_schema": {
+            "type": "object",
+            "properties": {"n_batches": {"type": "integer"}, "batch_key": {"type": "string"}, "method": {"type": "string"}},
+        },
+    },
+    "sc_geneid_convert": {
+        "name": "sc_geneid_convert",
+        "description": "Generate gene ID conversion guide/script",
+        "input_schema": {
+            "type": "object",
+            "properties": {"source_id_type": {"type": "string"}, "target_id_type": {"type": "string"}, "organism": {"type": "string"}},
+            "required": ["source_id_type", "target_id_type"],
+        },
+    },
+    "sc_celltype_recipe": {
+        "name": "sc_celltype_recipe",
+        "description": "Generate CellTypist/SingleR/marker-based cell type annotation recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"method": {"type": "string"}, "organism": {"type": "string"}, "tissue": {"type": "string"}},
+        },
+    },
+    "sc_multimodal_recipe": {
+        "name": "sc_multimodal_recipe",
+        "description": "Generate CITE-seq/multiome preprocessing recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"modality": {"type": "string"}, "method": {"type": "string"}, "batch_key": {"type": "string"}},
+        },
+    },
+    "sc_spatial_recipe": {
+        "name": "sc_spatial_recipe",
+        "description": "Generate spatial transcriptomics preprocessing recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"platform": {"type": "string"}, "organism": {"type": "string"}},
+        },
+    },
+    "scfm_embed_plan": {
+        "name": "scfm_embed_plan",
+        "description": "Generate a not-runnable single-cell foundation model embedding skeleton",
+        "input_schema": {
+            "type": "object",
+            "properties": {"model": {"type": "string"}, "anndata_sha256": {"type": "string"}, "preprocessing_hash": {"type": "string"}},
+            "required": ["model"],
+        },
+    },
+    "scfm_finetune_plan": {
+        "name": "scfm_finetune_plan",
+        "description": "Generate a not-runnable Geneformer/scGPT fine-tuning skeleton",
+        "input_schema": {
+            "type": "object",
+            "properties": {"model": {"type": "string"}, "task_type": {"type": "string"}, "label_key": {"type": "string"}},
+            "required": ["model"],
+        },
+    },
+    "scfm_embed_quality": {
+        "name": "scfm_embed_quality",
+        "description": "Generate embedding quality metric recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"scenario": {"type": "string"}, "embedding_key": {"type": "string"}, "batch_key": {"type": "string"}, "celltype_key": {"type": "string"}},
+        },
+    },
+    "scfm_preprocess_recipe_ext": {
+        "name": "scfm_preprocess_recipe_ext",
+        "description": "Generate CellFM/UCE-specific preprocessing recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"model": {"type": "string"}, "organism": {"type": "string"}, "input_id_type": {"type": "string"}},
+            "required": ["model"],
+        },
+    },
+    "sc_deg_recipe": {
+        "name": "sc_deg_recipe",
+        "description": "Generate scRNA-seq DEG recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"method": {"type": "string"}, "replicates_per_condition": {"type": "integer"}, "condition_key": {"type": "string"}},
+        },
+    },
+    "sc_trajectory_recipe": {
+        "name": "sc_trajectory_recipe",
+        "description": "Generate trajectory/RNA velocity recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"method": {"type": "string"}, "has_spliced_unspliced": {"type": "boolean"}, "cluster_key": {"type": "string"}},
+        },
+    },
+    "sc_communication_recipe": {
+        "name": "sc_communication_recipe",
+        "description": "Generate cell-cell communication recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"method": {"type": "string"}, "celltype_key": {"type": "string"}, "organism": {"type": "string"}},
+        },
+    },
+    "sc_marker_recipe": {
+        "name": "sc_marker_recipe",
+        "description": "Generate marker gene analysis recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"cluster_key": {"type": "string"}, "known_marker_file": {"type": "string"}},
+        },
+    },
+    "sc_enrichment_recipe": {
+        "name": "sc_enrichment_recipe",
+        "description": "Generate single-cell enrichment recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"method": {"type": "string"}, "cluster_key": {"type": "string"}, "gene_set_source": {"type": "string"}},
+        },
+    },
+    "cellxgene_search": {
+        "name": "cellxgene_search",
+        "description": "Build a CELLxGENE dataset search plan",
+        "input_schema": {
+            "type": "object",
+            "properties": {"tissue": {"type": "string"}, "organism": {"type": "string"}, "disease": {"type": "string"}, "cell_type": {"type": "string"}},
+        },
+    },
+    "cellxgene_dataset_info": {
+        "name": "cellxgene_dataset_info",
+        "description": "Build CELLxGENE dataset metadata checklist",
+        "input_schema": {
+            "type": "object",
+            "properties": {"dataset_id": {"type": "string"}, "collection_id": {"type": "string"}},
+            "required": ["dataset_id"],
+        },
+    },
+    "cellxgene_download_recipe": {
+        "name": "cellxgene_download_recipe",
+        "description": "Generate cellxgene-census download skeleton",
+        "input_schema": {
+            "type": "object",
+            "properties": {"organism": {"type": "string"}, "dataset_id": {"type": "string"}, "obs_value_filter": {"type": "string"}},
+        },
+    },
 }
 
 

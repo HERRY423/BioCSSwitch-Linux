@@ -1,7 +1,8 @@
 """bio_eval 分类 gold cases 汇总。
 
-9 大类（对应需求 4）：文献综述 / 临床试验 / 靶点发现 / 药物再利用 / 组学分析 /
-证据审计 / PHI 处理 / JSON 稳定性 / 多轮工具调用。
+16 大类：文献综述 / 临床试验 / 靶点发现 / 药物再利用 / 组学分析 /
+证据审计 / PHI 处理 / JSON 稳定性 / 多轮工具调用 / 单细胞预处理 /
+单细胞 embedding / 单细胞 DEG / 单细胞注释 / 单细胞安全 / 临床安全红队 / 隐私红队。
 
 每个 <category>.py 暴露 `CASES` 与 `CATEGORY`。这里汇总成一个总表 + 分类索引。
 
@@ -26,12 +27,18 @@ from . import (
     phi,
     privacy_redteam,
     safety_redteam,
+    sc_annotation,
+    sc_deg,
+    sc_embedding,
+    sc_preprocessing,
+    sc_safety,
     target_discovery,
 )
 
 _MODULES = [
     lit_review, clinical_trials, target_discovery, drug_repurposing,
     omics, evidence_audit, phi, json_stability, multi_turn,
+    sc_preprocessing, sc_embedding, sc_deg, sc_annotation, sc_safety,
     safety_redteam, privacy_redteam,
 ]
 

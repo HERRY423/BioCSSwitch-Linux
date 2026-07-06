@@ -4,6 +4,26 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.3.3] — 2026-07-06
+
+> BioCSSwitch 首个生物医学发行版。基于上游 CSSwitch v0.3.2（Science 顶部真实模型名 + Kimi/MiniMax + relay 空值守卫），面向 biomedical research 发布本地 MCP/Skill packs、证据审计、隐私/安全红队、单细胞与 scFM 工作流。
+
+### 新增 Added
+- **BioCSSwitch 品牌与发布入口**：桌面 app、窗口标题、README、检查更新 API、Release 页与 issue 链接切到 `HERRY423/BioCSSwitch`；版本推进到 `0.3.3`，bundle id 改为 `com.biocsswitch.menubar`，避免与上游 CSSwitch app 安装身份冲突。
+- **单细胞四件套**：新增 `bio-sc-downstream`（DEG / trajectory / RNA velocity / cell-cell communication / marker / enrichment 配方）、`bio-sc-atlas`（CELLxGENE 检索与下载 skeleton）、`sc-analysis` workflow skill，以及 `sc_scanpy_pipeline.py` 全流程 scanpy 脚本生成器。
+- **单细胞前处理扩展**：`bio-singlecell` 升至 `0.2.0`，新增 doublet、batch integration、gene ID conversion、cell type annotation、CITE-seq / multiome、spatial transcriptomics 配方，并统一输出 recipe hash + provenance skeleton。
+- **scFM 扩展**：`bio-scfm` 升至 `0.2.0`，新增 Geneformer/scGPT fine-tuning skeleton、embedding quality metrics、CellFM/UCE 专用预处理配方，并延续 `runnable=false` / `SystemExit` 护栏。
+- **bio_eval 覆盖单细胞场景**：case 分类扩到 16 类 / 70 cases，新增 sc_preprocessing、sc_embedding、sc_deg、sc_annotation、sc_safety，并把新增工具 schema 纳入 tool loop。
+
+### 验证 Verification
+- `python test/test_bio_offline.py`：全部通过。
+- `python test/bio_eval/run.py --selftest`：PASS，70 cases。
+- `python test/bio_eval/gold_calibration.py --check`：PASS。
+
+### 说明 Notes
+- 本机 Windows 环境缺少 WSL/bash 与 Rust `cargo`，因此 `scripts/release-verify.sh` 的 shell 包装层和 Tauri/Rust build gate 未在本机完成；当前 release 以源码与 biomedical pack 能力为主。打包 `.dmg` 前仍需在装有 Rust/Node/Tauri 的 macOS 环境运行 `bash scripts/release-verify.sh --build`。
+- 内部环境变量、代理脚本名、`~/.csswitch` 配置目录暂不重命名，以保持与成熟链路、脚本和既有配置兼容。
+
 ## [Unreleased] — 生医研究扩展（GRADE/scFM/benchmark 加固 + EtD/模型矩阵/provider 矩阵）
 
 > 主题：修三处正确性问题，再叠三层能力。全部离线可测（`test/test_bio_offline.py` 现 62 项断言全绿）。

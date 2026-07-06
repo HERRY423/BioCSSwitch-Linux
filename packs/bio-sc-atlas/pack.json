@@ -1,0 +1,17 @@
+{
+  "id": "bio-sc-atlas",
+  "name": "单细胞图谱检索（CELLxGENE）",
+  "description": "CELLxGENE Census / Discover 的轻量查询与下载配方层：按 tissue、organism、disease、cell type 生成数据集检索计划、记录元数据字段，并输出 cellxgene-census SDK 下载 skeleton。默认不引入重 SDK，不代替用户下载大数据。",
+  "version": "0.1.0",
+  "requires_env": [],
+  "optional_env": [],
+  "depends_on": ["bio-singlecell"],
+  "servers": [
+    {
+      "name": "bio-sc-atlas",
+      "script": "packs/bio-sc-atlas/atlas_server.py",
+      "env_pass": []
+    }
+  ],
+  "skills": []
+}

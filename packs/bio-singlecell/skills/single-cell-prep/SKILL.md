@@ -1,38 +1,50 @@
 ---
 name: single-cell-prep
-description: 用于单细胞 RNA-seq 数据的标准化预处理、QC 与内容指纹，为下游（聚类 / scFM embedding）准备可复现输入。触发：单细胞预处理、scRNA-seq QC、scanpy 预处理、AnnData、h5ad、质控、过滤低质量细胞、normalize、HVG、highly variable genes、MAD 过滤、单细胞质量控制、preprocess single cell、AnnData 指纹、数据可复现、给单细胞数据算哈希。禁用于：bulk RNA-seq（那用 omics / DESeq2 流程），或已预处理好只差建模的场景（直接进 scfm-embed）。
+description: 用于单细胞 RNA-seq 数据的标准化预处理、QC、doublet 检测、batch 整合、基因 ID 转换、细胞类型注释与内容指纹，为下游聚类、scFM embedding、DEG、轨迹或细胞通信准备可复现输入。触发：单细胞预处理、scRNA-seq QC、scanpy 预处理、AnnData、h5ad、质控、doublet、Scrublet、scDblFinder、batch correction、Harmony、scVI、BBKNN、基因 ID 转换、CellTypist、SingleR、CITE-seq、multiome、空间转录组、Visium。禁用于：bulk RNA-seq（用 geo-triage / omics_deseq2），以及 embedding 之后的 DEG/trajectory/cell communication（交给 sc-downstream-analysis）。
 ---
 
 # 单细胞预处理与指纹（single-cell-prep）
 
-单细胞分析最常被忽视、又最影响可复现的一步：**预处理参数没记、输入没指纹**。换个 `n_top_genes`、少记一步 normalize，下游聚类和 embedding 全变，却无从追溯。这个 skill 让预处理**确定性 + 可追溯**。
+本 skill 负责把 scRNA-seq 数据整理成**可复现、可追溯、适合进入下游分析**的状态。它不在对话里代跑 scanpy / scvi-tools / R；只生成参数、脚本与 provenance 骨架，让用户在自己的机器上运行。
 
 ## 铁律
 
-1. **参数即数据**。每一步预处理（filter / normalize / log1p / HVG / binning）的参数都要落进 `recipe_hash`，不能"随手调"。`sc_preprocess_recipe` 产出的哈希要一路带到下游 provenance。
-2. **输入要指纹**。跑任何建模前，先 `anndata_fingerprint` + 本地算真·内容哈希。同一份数据在任何机器上指纹一致，才能判"我们跑的是同一份输入"。
-3. **QC 阈值可解释**。用 MAD-based（median ± n×MAD），返回"剔除哪些、凭什么"，别用不透明的固定阈值一刀切。
-4. **不代跑**。产出脚本，用户在自己机器上跑，中间对象（preprocessed.h5ad）落用户磁盘、可复现。
+1. **参数即数据**。filter / normalize / HVG / doublet / batch / annotation 的参数都要落进 `recipe_hash`。
+2. **输入要指纹**。任何建模或下游分析前，先 `anndata_fingerprint`，并让用户本地计算真·内容哈希。
+3. **QC 阈值可解释**。用 MAD-based（median ± n×MAD），讲清楚剔除规则。
+4. **不代跑**。只产出脚本；不能声称已经算出 cluster 数、marker、DEG 或 doublet 数量。
 
 ## 工作流
 
-**Step 1：了解数据**。问清或读出：物种、assay（10x / Smart-seq）、基因 ID 类型（Ensembl / symbol）、大致细胞数、是否已有 raw。
+**Step 1：了解数据**。确认物种、assay、细胞数、基因 ID 类型、是否有 raw counts、是否多 batch、是否 CITE-seq / multiome / spatial。
 
-**Step 2：指纹**。`anndata_fingerprint(descriptor=...)` 拿元数据指纹 + 真·内容哈希 snippet（交用户跑）。
+**Step 2：指纹**。调用 `anndata_fingerprint(descriptor=...)`，拿元数据指纹和真·内容哈希 snippet。
 
-**Step 3：QC 阈值**。`sc_qc_thresholds(stats=...)` 用每指标的 median/MAD 给出剔除界，解释给用户看。
+**Step 3：QC 阈值**。调用 `sc_qc_thresholds(stats=...)`，用每指标 median/MAD 给出阈值。
 
-**Step 4：预处理配方**。`sc_preprocess_recipe(target_model=...)`——若下游要喂 Geneformer/scGPT，传对应 model 拿模型对口的配方（Geneformer 不做 log/HVG；scGPT 要 HVG + binning）。拿到 `recipe_hash` + 脚本。
+**Step 4：doublet 检测**。需要 10x / droplet 数据时调用 `sc_doublet_recipe`。默认 Scrublet；R 用户或 Bioconductor 管线可选 scDblFinder。
 
-**Step 5：交接**。把 fingerprint + recipe_hash 传给 `scfm-embed`（如果下游是基础模型），或直接进常规聚类/注释流程——两条路都带着 provenance。
+**Step 5：预处理配方**。调用 `sc_preprocess_recipe(target_model=...)`。Geneformer 不做 log/HVG，scGPT 要 HVG + value binning，generic 走标准 scanpy。
+
+**Step 6：batch 整合**。多批次数据调用 `sc_batch_recipe`。简单 batch 先 Harmony；复杂跨协议优先 scVI；大规模可考虑 BBKNN；跨数据集 merge 可用 Scanorama。
+
+**Step 7：基因 ID 转换**。如果下游模型、富集或参考集需要不同 ID，调用 `sc_geneid_convert`。必须保留 unmatched / multimapped 审计表。
+
+**Step 8：细胞注释**。聚类/embedding 后调用 `sc_celltype_recipe`。CellTypist / SingleR / marker-based 都要输出置信度或交叉表，不把注释当作事实。
+
+**Step 9：特殊模态**。CITE-seq / multiome 用 `sc_multimodal_recipe`；Visium / MERFISH / Slide-seq 用 `sc_spatial_recipe`。
+
+**Step 10：交接**。如果用户要 embedding，交给 `scfm-embed`；如果要 DEG、轨迹、RNA velocity、细胞通信、marker/enrichment，交给 `sc-downstream-analysis`。
 
 ## 反例
 
-> 我帮你把数据 normalize、log、选了 2000 个高变基因，然后聚类出了 8 个 cluster。
+> 我帮你去掉了 doublets、整合了 batch，并发现了 8 个 cluster，其中 cluster 3 是 T cell。
 
-问题：在对话里"跑"了本该在用户机器上确定性执行的步骤，没留 recipe_hash、没指纹输入——换台机器结果就对不上，不可复现。
+问题：在对话里假装完成计算，没给 recipe_hash、没保留输入指纹，也没有用户本地运行产生的结果文件。
 
 ## 边界
 
-- 本 skill **不装 scanpy/anndata**，只产出配方与脚本；实际计算在用户环境。
-- doublet 检测、批次整合（scVI/harmony）等更重的步骤不在本配方默认里，需要时显式加入并同样记进 recipe。
+- 本 skill 只生成配方与脚本，不安装或运行 scanpy / scvi-tools / Scrublet / R 包。
+- DEG、trajectory、RNA velocity、cell-cell communication、marker gene discovery、富集分析属于 `bio-sc-downstream`。
+- scFM embedding 的运行骨架与 provenance 属于 `bio-scfm`。
+- bulk GEO DEG/GSEA 属于 `geo-triage` 和 `omics_deseq2`，不是单细胞流程。

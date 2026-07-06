@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/social-preview.png" alt="CSSwitch" width="760">
+  <img src="docs/assets/social-preview.png" alt="BioCSSwitch" width="760">
 </p>
 
 <p align="center">
@@ -8,19 +8,21 @@
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-C25A34.svg" alt="Tauri 2">
 </p>
 
-# CSSwitch
+# BioCSSwitch
 
 [Claude Science](https://claude.com) 是 Anthropic 推出的 AI Agent 科研平台，可以协助完成文献检索与分析、数据处理、图表生成和论文写作等工作。
 
-CSSwitch 让你不必订阅 Claude，也能在 Science 中使用自己的第三方模型。填入 API Key，选择服务商，剩下的交给 CSSwitch。简单来说，它之于 Claude Science，就像 CC Switch 之于 Claude Code。
+BioCSSwitch 是面向生物医学研究场景的 CSSwitch 分支。它基于上游 CSSwitch v0.3.2 的多 provider / 真实模型名显示能力，额外加入本地 biomedical MCP/Skill packs、证据审计、隐私红队、单细胞分析与 scFM 工作流。
+
+它让你不必订阅 Claude，也能在 Science 中使用自己的第三方模型。填入 API Key，选择服务商，剩下的交给 BioCSSwitch。简单来说，它之于 Claude Science，就像 CC Switch 之于 Claude Code；但默认工具包更偏向文献、临床试验、药物靶点、组学和单细胞研究。
 
 ## 背景
 
 Science 需要登录才能正常启动，但启动之后，推理请求发往哪里由环境变量 `ANTHROPIC_BASE_URL` 决定。
 
-CSSwitch 会把这个地址指向本地代理。代理收到请求后，会移除 Science 附带的 OAuth 信息，换成你的第三方 API Key；如果服务商使用不同的接口格式，代理还会负责协议转换，最后把请求发给你选择的模型。
+BioCSSwitch 会把这个地址指向本地代理。代理收到请求后，会移除 Science 附带的 OAuth 信息，换成你的第三方 API Key；如果服务商使用不同的接口格式，代理还会负责协议转换，最后把请求发给你选择的模型。
 
-Science 启动所需的登录状态则由 CSSwitch 在隔离环境中生成。这套本地登录只负责让 Science 启动，不参与后续推理，也不会接触你真实的 Claude 登录信息。
+Science 启动所需的登录状态则由 BioCSSwitch 在隔离环境中生成。这套本地登录只负责让 Science 启动，不参与后续推理，也不会接触你真实的 Claude 登录信息。
 
 ```
 Claude Science（隔离环境 · 本地登录）
@@ -33,23 +35,25 @@ DeepSeek 原生 Anthropic 端点  /  通义千问等 OpenAI 兼容端点
 
 ## 致谢
 
-CSSwitch 的名字和产品形态参考了 [CC Switch](https://github.com/farion1231/cc-switch)，后者是一款使用 Tauri 和 Rust 开发的 Claude Code API 服务商切换工具。CSSwitch 的部分交互设计也借鉴了 CC Switch，在此表示感谢。两个项目彼此独立，不存在从属或背书关系。
+BioCSSwitch 继承自 [SuperJJ007/CSSwitch](https://github.com/SuperJJ007/CSSwitch)，CSSwitch 的名字和产品形态参考了 [CC Switch](https://github.com/farion1231/cc-switch)，后者是一款使用 Tauri 和 Rust 开发的 Claude Code API 服务商切换工具。BioCSSwitch 与这些项目彼此独立，不存在从属或背书关系。
 
 ## 特性
 
 ### 省心好用
 
-- **装好就能用**：新建一条第三方配置、填入 API Key、设为当前，点击「一键开始」，CSSwitch 会自动启动代理和隔离环境，并打开已经完成本地登录的 Science。虚拟登录由 Rust 原生实现，不需要另外安装 Node.js。
+- **装好就能用**：新建一条第三方配置、填入 API Key、设为当前，点击「一键开始」，BioCSSwitch 会自动启动代理和隔离环境，并打开已经完成本地登录的 Science。虚拟登录由 Rust 原生实现，不需要另外安装 Node.js。
 - **重复点击也不会打乱状态**：「一键开始」会先检查当前运行状态。窗口关了就重新打开，代理停了就重启代理，隔离环境没启动就补上。它不会反复生成登录身份，也不会把正在使用的会话切换到其他组织。发现连接异常时，还会先检查并尝试自动恢复。
-- **随时切回官方 Claude**：如果你有 Claude 订阅，可以在面板顶部切换到「官方 Claude」。切换后，CSSwitch 不会再启动代理或隔离环境，也不会干预你的官方登录。
+- **随时切回官方 Claude**：如果你有 Claude 订阅，可以在面板顶部切换到「官方 Claude」。切换后，BioCSSwitch 不会再启动代理或隔离环境，也不会干预你的官方登录。
 - **保留模型原生能力**：DeepSeek 通过原生 Anthropic 端点接入，不需要额外转换协议，可以更完整地保留 Thinking 和工具调用等能力。
 - **自己挑模型，显示也不含糊**：每个服务商都能在下拉里选择我们维护的主流模型，也可以直接填写任意模型名。填好后，Science 顶部的模型选择器会显示你选择的真实模型名（例如 `glm-5.2`），而不是笼统的 claude。
-- **启用前会校验 Key**：把一条配置「设为当前」或修改正在生效的连接时，CSSwitch 会先发一条最小请求验证 Key，通不过就自动回退、不会谎报已生效。（新建配置只保存、不联网，验证留到启用那一步。）
+- **启用前会校验 Key**：把一条配置「设为当前」或修改正在生效的连接时，BioCSSwitch 会先发一条最小请求验证 Key，通不过就自动回退、不会谎报已生效。（新建配置只保存、不联网，验证留到启用那一步。）
+- **内置生物医学工具包**：覆盖 PubMed / Europe PMC / Crossref / bioRxiv / ClinicalTrials.gov / ChEMBL / Open Targets / HGNC / MeSH / UniProt / Ensembl 等本地 MCP 与 Skill 工作流，并提供证据审计、GRADE/SoF、PHI 脱敏、隐私红队和 provider benchmark。
+- **单细胞与 scFM 工作流**：提供 `bio-singlecell`、`bio-scfm`、`bio-sc-downstream`、`bio-sc-atlas` 与 `sc-analysis`，生成 QC、doublet、batch、cell type annotation、Geneformer/scGPT/CellFM/UCE embedding skeleton、DEG、trajectory、cell-cell communication 和 CELLxGENE 下载配方。
 - **方便检查更新**：可以从面板直接打开 GitHub Releases，查看和下载新版本。
 
 ### 与真实账号隔离
 
-- **不读取真实登录凭证**：Science 启动所需的登录状态由 CSSwitch 在本地生成。你的 `~/.claude-science` 不会被复制、修改或删除。
+- **不读取真实登录凭证**：Science 启动所需的登录状态由 BioCSSwitch 在本地生成。你的 `~/.claude-science` 不会被复制、修改或删除。
 - **不干扰真实 Science**：隔离环境拥有独立的 HOME、端口和数据目录，不会占用真实 Science 使用的 8765 端口。程序也为真实数据目录和端口设置了保护措施，一旦发现可能发生冲突，就会停止操作。
 - **API Key 只保存在本机**：密钥以 `0600` 权限保存在 `~/.csswitch`，并通过环境变量传给子进程，不会写入命令行参数或日志。界面只显示经过遮盖的末四位。
 - **代理只接受本机请求**：代理仅监听回环地址，并通过路径 Secret 验证请求。传入请求中的 `Authorization` 和 `x-api-key` 会先被移除，不会被原样转发给第三方服务商。
@@ -76,12 +80,12 @@ CSSwitch 的名字和产品形态参考了 [CC Switch](https://github.com/farion
 
 开始之前，请先安装 [Claude Science](https://claude.com)，并确认系统中有 `python3`。虚拟登录已经由 Rust 原生实现，**不需要安装 Node.js**。
 
-1. 从最新的 [Release](../../releases/latest) 下载 `CSSwitch_*.dmg`，然后把 CSSwitch 拖入「应用程序」。由于当前版本尚未经过 Apple 公证，第一次启动时请右键应用并选择「打开」。
-2. 打开 CSSwitch，保持顶部选择「**第三方模型**」，点「**＋ 新建**」，选择来源、粘贴自己的第三方 API Key，点「**创建**」。密钥只保存在本机 `~/.csswitch` 目录下（`config.json` 及其滚动 / 迁移备份，均为 `0600` 权限），不会离开你的电脑。
-3. 在列表里点这条配置的「**设为当前**」。CSSwitch 会先校验 Key 再启用，通不过会提示、不会切换。
-4. 点击「**一键开始**」。CSSwitch 会依次启动代理、写入本地登录状态、启动隔离环境，并在浏览器中打开 Science。
+1. 从最新的 [Release](../../releases/latest) 下载 `BioCSSwitch_*.dmg`，然后把 BioCSSwitch 拖入「应用程序」。由于当前版本尚未经过 Apple 公证，第一次启动时请右键应用并选择「打开」。
+2. 打开 BioCSSwitch，保持顶部选择「**第三方模型**」，点「**＋ 新建**」，选择来源、粘贴自己的第三方 API Key，点「**创建**」。密钥只保存在本机 `~/.csswitch` 目录下（`config.json` 及其滚动 / 迁移备份，均为 `0600` 权限），不会离开你的电脑。
+3. 在列表里点这条配置的「**设为当前**」。BioCSSwitch 会先校验 Key 再启用，通不过会提示、不会切换。
+4. 点击「**一键开始**」。BioCSSwitch 会依次启动代理、写入本地登录状态、启动隔离环境，并在浏览器中打开 Science。
 
-> 你只需要准备自己的第三方 API Key，其余步骤由 CSSwitch 自动完成。
+> 你只需要准备自己的第三方 API Key，其余步骤由 BioCSSwitch 自动完成。
 >
 > 如果应用被 Gatekeeper 拦截，可以右键选择「打开」，或者前往「系统设置 → 隐私与安全性」并点击「仍要打开」。当前版本仅支持 Apple Silicon（arm64）。
 
@@ -115,14 +119,14 @@ CSSwitch 的名字和产品形态参考了 [CC Switch](https://github.com/farion
 
 遇到问题或有新的想法，欢迎在 GitHub 提交反馈，方便持续跟踪和集中讨论：
 
-- **报告问题**：[新建 Bug 反馈](https://github.com/SuperJJ007/CSSwitch/issues/new?template=bug_report.yml)，也可以点击面板右下角的「反馈 / 报 bug」。
-- **提出功能建议**：[新建功能建议](https://github.com/SuperJJ007/CSSwitch/issues/new?template=feature_request.yml)，告诉我们你希望支持的模型或 API。
+- **报告问题**：[新建 Bug 反馈](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml)，也可以点击面板右下角的「反馈 / 报 bug」。
+- **提出功能建议**：[新建功能建议](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)，告诉我们你希望支持的模型或 API。
 - **附上日志**：面板中的「日志」链接会打开 `~/.csswitch/logs/`，其中包含 `proxy.log` 和 `sandbox.log`。日志可以帮助定位问题，但**提交前请务必删除其中的 API Key 和令牌**。
 
-CSSwitch 不包含自动遥测或崩溃上报，也不会在后台上传你的数据。只有你主动提交的反馈，才会离开本机。
+BioCSSwitch 不包含自动遥测或崩溃上报，也不会在后台上传你的数据。只有你主动提交的反馈，才会离开本机。
 
 <p align="center">
-  <img src="docs/assets/wechat-group.jpg" alt="CSSwitch 微信群" width="420">
+  <img src="docs/assets/wechat-group.jpg" alt="BioCSSwitch 微信群" width="420">
 </p>
 
 ## 风险与免责声明

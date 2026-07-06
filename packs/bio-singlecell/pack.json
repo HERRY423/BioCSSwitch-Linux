@@ -1,8 +1,8 @@
 {
   "id": "bio-singlecell",
   "name": "单细胞数据处理与指纹",
-  "description": "给 scFM（Geneformer / scGPT）喂数据前的标准化 + 可追溯层：AnnData 内容指纹（+ 生成算真·内容哈希的代码）、确定性 scanpy 预处理配方（参数 + 脚本 + provenance 哈希）、MAD-based QC 阈值建议。不代跑分析——产出可复现配方，重活在用户机器上跑。",
-  "version": "0.1.0",
+  "description": "给 scRNA-seq / scFM 下游分析准备可复现输入层：AnnData 内容指纹、MAD-based QC、确定性 scanpy 预处理配方，以及 doublet 检测、batch 整合、基因 ID 转换、细胞类型注释、多模态与空间转录组预处理配方。不代跑分析——产出可复现脚本 + provenance，重活在用户机器上跑。",
+  "version": "0.2.0",
   "requires_env": [],
   "optional_env": [],
   "depends_on": [],
