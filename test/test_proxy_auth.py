@@ -287,5 +287,48 @@ class ProxyOpenAICustomModelsDiscovery(unittest.TestCase):
         self.assertEqual(self.hits, ["/up/v1/models"])
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
+class ProxyOpenAIResponses(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.up_url, cls.hits, cls.stop_up = start_mock("openai_responses")
+        port = 18996
+        cls.base = f"http://127.0.0.1:{port}"
+        cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-openai-responses-{port}.log")
+        open(cls.logf, "w").close()
+        env = dict(os.environ, CSSWITCH_OPENAI_KEY="fake-openai-key",
+                   CSSWITCH_OPENAI_BASE_URL=cls.up_url,
+                   CSSWITCH_OPENAI_MODEL="gpt-5.2")
+        cls.proc = subprocess.Popen(
+            [sys.executable, PROXY, "--provider", "openai-responses",
+             "--port", str(port), "--auth-token", SEC, "--log", cls.logf],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            try:
+                s, _b = _req(f"{cls.base}/{SEC}/health")
+                if s == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(timeout=5)
+        cls.stop_up()
+
+    def test_messages_use_responses_endpoint_and_convert_back(self):
+        s, b = _req(f"{self.base}/{SEC}/v1/messages", "POST",
+                    {"model": "claude-opus-4-8", "max_tokens": 10,
+                     "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(s, 200, b[:160])
+        body = json.loads(b)
+        self.assertEqual(body["content"], [{"type": "text", "text": "ok-responses"}])
+        self.assertEqual(body["usage"], {"input_tokens": 2, "output_tokens": 3})
+        self.assertIn("/up/v1/responses", self.hits)
+        self.assertNotIn("/up/v1/chat/completions", self.hits)
+
+
 if __name__ == "__main__":
     unittest.main()

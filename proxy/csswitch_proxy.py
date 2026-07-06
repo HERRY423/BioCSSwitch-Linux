@@ -8,6 +8,8 @@ Providers:
   qwen           ：DashScope compatible-mode —— Anthropic↔OpenAI 双向翻译（流式以 SSE 回放保真 tool_use）。
   openai-custom  ：任意 OpenAI Chat Completions 兼容端点，base_url + token + model。
                    代理拼 /chat/completions 与 /models，并复用 qwen 的 Anthropic↔OpenAI 翻译链。
+  openai-responses：任意 OpenAI Responses 兼容端点，base_url + token + model。
+                   代理拼 /responses 与 /models，并做 Anthropic↔Responses 翻译。
   relay          ：任意「中转站」（Anthropic 兼容端点，base_url + token）。原生透传、【不重映射模型】，
                    /v1/models 回源直拉让 Science 选择器自动铺满中转站真实模型。base_url 经
                    CSSWITCH_RELAY_BASE_URL 提供、token 经 CSSWITCH_RELAY_KEY 提供。
@@ -104,6 +106,7 @@ PROVIDERS = {
     },
     "openai-custom": {
         "mode": "openai",
+        "api_format": "openai_chat",
         "url": None,
         "models_url": None,
         "key_env": "CSSWITCH_OPENAI_KEY",
@@ -113,6 +116,23 @@ PROVIDERS = {
         "model_map": {},
         "model_caps": {},
         "default_cap": None,
+        "default_model": "",
+    },
+    "openai-responses": {
+        "mode": "openai",
+        "api_format": "openai_responses",
+        "url": None,
+        "models_url": None,
+        "key_env": "CSSWITCH_OPENAI_KEY",
+        "auth_style": "bearer",
+        "force_model_override": True,
+        "models": [],
+        "model_map": {},
+        "model_caps": {},
+        # DashScope Responses rejects values above 65536; generic Responses-compatible
+        # endpoints commonly accept this as a safe ceiling. Chat Completions custom
+        # intentionally stays unclamped.
+        "default_cap": 65536,
         "default_model": "",
     },
     "relay": {
@@ -145,7 +165,7 @@ AUTH_SECRET = None  # 未设则不启用鉴权（保持旧行为）
 # （如 claude-haiku-4-5-20251001）。首拉前为空 → 纯透传。
 RELAY_MODELS = []
 # 强制模型 override：面板选了模型时，代理无条件把所有请求模型改成它（relay 覆盖透传；
-# openai-custom 覆盖 Science 发来的 claude-* 壳）。由 CSSWITCH_RELAY_MODEL 或
+# openai-custom/openai-responses 覆盖 Science 发来的 claude-* 壳）。由 CSSWITCH_RELAY_MODEL 或
 # CSSWITCH_OPENAI_MODEL 环境变量在 __main__ 里装配；留空 → None。
 RELAY_FORCE_MODEL = None
 # relay thinking 策略（来自模板 thinking_policy）：由 CSSWITCH_RELAY_THINKING 在 __main__ 装配。
@@ -167,7 +187,7 @@ UPSTREAM_UA = "CSSwitch/0.2 (+https://github.com/SuperJJ007/CSSwitch)"
 #   - 403 Forbidden    = 「登录了但没权限」→ operon 当成组织/权限问题【反复重试】→ 一直卡
 #     "Switching organization"（v0.1.4 实机复现：server 日志固定 `/api/oauth/profile → 403`，
 #     无 `treating as logged-out`）。
-# 虚拟登录本就该表现为「未登录」，故用 401。详见 findings/switching-organization-hang.md。
+# 虚拟登录本就该表现为「未登录」，故用 401。
 _BLOCKED_SUFFIXES = ("anthropic.com", "claude.ai", "claude.com")
 
 
@@ -303,7 +323,8 @@ def normalize_openai_base(base):
     """OpenAI 兼容端点存 base root。用户若误填到 /chat/completions 或 /models，
     这里收敛回 root，避免后续双拼。"""
     b = (base or "").strip().rstrip("/")
-    for suffix in ("/v1/chat/completions", "/chat/completions", "/v1/models", "/models"):
+    for suffix in ("/v1/chat/completions", "/chat/completions",
+                   "/v1/responses", "/responses", "/v1/models", "/models"):
         if b.endswith(suffix):
             b = b[: -len(suffix)].rstrip("/")
     return b
@@ -488,6 +509,100 @@ def map_tool_choice(tc, tools):
     return None
 
 
+def map_responses_tool_choice(tc, tools):
+    """把 Anthropic tool_choice 译成 Responses API 取值。
+    千问 Responses 在 thinking mode 下会拒绝 required/object 形态；Science 会在
+    reviewing/agent 路径发送强制工具选择。这里保守降级为 auto，宁可不强制工具，
+    也不要让整个请求 400。"""
+    if not isinstance(tc, dict):
+        return None
+    t = tc.get("type")
+    if t == "auto":
+        return "auto"
+    if t == "none":
+        return "none"
+    if t in ("tool", "any"):
+        return "auto"
+    return None
+
+
+def _as_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(x.get("text", "") for x in value if isinstance(x, dict))
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def anthropic_to_openai_responses(req):
+    sys_prompt = req.get("system")
+    if isinstance(sys_prompt, list):
+        sys_prompt = "\n".join(b.get("text", "") for b in sys_prompt if isinstance(b, dict))
+
+    items = []
+    for m in req.get("messages", []):
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, str):
+            items.append({"role": role, "content": content})
+            continue
+
+        text_parts = []
+        for blk in content or []:
+            t = blk.get("type")
+            if t == "text":
+                text_parts.append(blk.get("text", ""))
+            elif t == "tool_use":
+                if text_parts:
+                    items.append({"role": role, "content": "".join(text_parts)})
+                    text_parts = []
+                items.append({
+                    "type": "function_call",
+                    "call_id": blk.get("id"),
+                    "name": blk.get("name"),
+                    "arguments": json.dumps(blk.get("input", {}), ensure_ascii=False),
+                })
+            elif t == "tool_result":
+                if text_parts:
+                    items.append({"role": role, "content": "".join(text_parts)})
+                    text_parts = []
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": blk.get("tool_use_id"),
+                    "output": _as_text(blk.get("content")),
+                })
+        if text_parts:
+            items.append({"role": role, "content": "".join(text_parts)})
+
+    _st = _provider_state(req)
+    out = {
+        "model": provider_policy.resolve_model(req.get("model"), _st),
+        "input": items,
+        "stream": False,
+    }
+    if sys_prompt:
+        out["instructions"] = sys_prompt
+    if req.get("max_tokens"):
+        out["max_output_tokens"] = provider_policy.clamp_max_tokens(req["max_tokens"], out["model"], _st)
+    if req.get("temperature") is not None:
+        out["temperature"] = req["temperature"]
+    if req.get("top_p") is not None:
+        out["top_p"] = req["top_p"]
+    if req.get("tools"):
+        out["tools"] = [{
+            "type": "function",
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "parameters": t.get("input_schema", {}),
+        } for t in req["tools"] if t.get("name")]
+    tcm = map_responses_tool_choice(req.get("tool_choice"), req.get("tools"))
+    if tcm is not None:
+        out["tool_choice"] = tcm
+    return out
+
+
 def openai_to_anthropic(resp, model_id):
     choice = (resp.get("choices") or [{}])[0]
     msg = choice.get("message", {})
@@ -510,6 +625,53 @@ def openai_to_anthropic(resp, model_id):
         "stop_reason": stop, "stop_sequence": None,
         "usage": {"input_tokens": usage.get("prompt_tokens", 0),
                   "output_tokens": usage.get("completion_tokens", 0)},
+    }
+
+
+def _responses_output_text(item):
+    parts = []
+    for c in item.get("content") or []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("type") in ("output_text", "text"):
+            parts.append(c.get("text", ""))
+    return "".join(parts)
+
+
+def openai_responses_to_anthropic(resp, model_id):
+    blocks = []
+    for item in resp.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        t = item.get("type")
+        if t == "message":
+            text = _responses_output_text(item)
+            if text:
+                blocks.append({"type": "text", "text": text})
+        elif t == "function_call":
+            raw_args = item.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+            except Exception:
+                args = {}
+            blocks.append({
+                "type": "tool_use",
+                "id": item.get("call_id") or item.get("id"),
+                "name": item.get("name"),
+                "input": args,
+            })
+    if not blocks and resp.get("output_text"):
+        blocks.append({"type": "text", "text": resp.get("output_text", "")})
+    usage = resp.get("usage", {})
+    stop = "tool_use" if any(b.get("type") == "tool_use" for b in blocks) else "end_turn"
+    if resp.get("status") == "incomplete":
+        stop = "max_tokens"
+    return {
+        "id": resp.get("id", "msg_proxy"), "type": "message", "role": "assistant", "model": model_id,
+        "content": blocks or [{"type": "text", "text": ""}],
+        "stop_reason": stop, "stop_sequence": None,
+        "usage": {"input_tokens": usage.get("input_tokens", 0),
+                  "output_tokens": usage.get("output_tokens", 0)},
     }
 
 
@@ -798,16 +960,24 @@ class H(BaseHTTPRequestHandler):
     def _handle_openai(self, areq):
         model_id = areq.get("model", "claude-sonnet-5")
         stream = bool(areq.get("stream"))
-        oreq = anthropic_to_openai(areq)
+        if PROV.get("api_format") == "openai_responses":
+            oreq = anthropic_to_openai_responses(areq)
+            msg_count = len(oreq.get("input") or [])
+        else:
+            oreq = anthropic_to_openai(areq)
+            msg_count = len(oreq.get("messages") or [])
         n_tools = len(oreq.get("tools", []))
         log(f"POST /v1/messages  {model_id}->{oreq['model']} stream={stream} tools={n_tools} "
-            f"msgs={len(oreq['messages'])}  (入站鉴权已剥离, {PROV_NAME})")
+            f"msgs={msg_count}  (入站鉴权已剥离, {PROV_NAME})")
         headers = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
         data = json.dumps(oreq).encode()
         try:
             raw, _ct = http_post(PROV["url"], data, headers)
             oresp = json.loads(raw)
-            aresp = openai_to_anthropic(oresp, model_id)
+            if PROV.get("api_format") == "openai_responses":
+                aresp = openai_responses_to_anthropic(oresp, model_id)
+            else:
+                aresp = openai_to_anthropic(oresp, model_id)
             if stream:
                 self._replay_as_sse(aresp)
             else:
@@ -890,15 +1060,16 @@ if __name__ == "__main__":
         if forced:
             RELAY_FORCE_MODEL = forced
         RELAY_THINKING = (os.environ.get("CSSWITCH_RELAY_THINKING") or "").strip() or None
-    elif PROV_NAME == "openai-custom":
+    elif PROV_NAME in ("openai-custom", "openai-responses"):
         base = normalize_openai_base(os.environ.get("CSSWITCH_OPENAI_BASE_URL") or args.openai_base or "")
         if not base or not re.match(r"^https?://", base):
-            print("openai-custom 需要 OpenAI base root（http(s)://…）。用 --openai-base 或环境变量 "
+            print(f"{PROV_NAME} 需要 OpenAI base root（http(s)://…）。用 --openai-base 或环境变量 "
                   "CSSWITCH_OPENAI_BASE_URL 提供。", file=sys.stderr)
             sys.exit(1)
         forced = (os.environ.get("CSSWITCH_OPENAI_MODEL") or "").strip()
         PROV = dict(PROV)
-        PROV["url"] = openai_endpoint(base, "/chat/completions")
+        suffix = "/responses" if PROV.get("api_format") == "openai_responses" else "/chat/completions"
+        PROV["url"] = openai_endpoint(base, suffix)
         PROV["models_url"] = openai_endpoint(base, "/models")
         # 模型发现 scratch 只需要 /models，不能要求 CSSWITCH_OPENAI_MODEL；
         # 正式推理由 Rust 侧 relay_missing_model + Message 探针保证 model 必填。

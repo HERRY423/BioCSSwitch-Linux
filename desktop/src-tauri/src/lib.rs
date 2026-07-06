@@ -6,7 +6,7 @@
 //! Python/Node/shell 里被当作子进程调用，以保住铁律护栏与已验证行为。
 //!
 //! 运行行为由生效 profile 的 `template_id` 经 [`templates`] 注册表派生出 adapter
-//! （deepseek | qwen | relay | openai-custom），再传给 python 代理 `--provider`。
+//! （deepseek | qwen | relay | openai-custom | openai-responses），再传给 python 代理 `--provider`。
 //!
 //! 铁律相关：key 只在内存与 0600 的 config.json；回显前端只给掩码；沙箱端口/目录护栏
 //! 由被调脚本负责（对 8765 与真实目录失败关闭）；退 app 默认停代理、保留沙箱。
@@ -35,7 +35,7 @@ struct AppState {
     proxy: Option<Child>,
     proxy_port: u16,
     secret: String,
-    /// 当前代理进程所用 adapter 名（deepseek | qwen | relay | openai-custom）；用于健康复用判定。
+    /// 当前代理进程所用 adapter 名（deepseek | qwen | relay | openai-custom | openai-responses）；用于健康复用判定。
     provider: String,
     /// 当前代理进程所用 key 的非加密指纹（仅内存、绝不落盘/打印）。
     /// 换 key/换上游后指纹变化 → 触发重启，避免复用带旧配置的代理。
@@ -59,7 +59,7 @@ fn key_env_for_adapter(adapter: &str) -> &'static str {
     match adapter {
         "deepseek" => "DEEPSEEK_API_KEY",
         "qwen" => "DASHSCOPE_API_KEY",
-        "openai-custom" => "CSSWITCH_OPENAI_KEY",
+        "openai-custom" | "openai-responses" => "CSSWITCH_OPENAI_KEY",
         _ => "CSSWITCH_RELAY_KEY", // relay / 兜底
     }
 }
@@ -100,12 +100,12 @@ fn proxy_fingerprint(p: &config::Profile, launch: &ProxyLaunch) -> u64 {
     ))
 }
 
-/// 本轨仅支持 anthropic / openai_chat；其余进 schema 但激活拒绝（待轨道 2：Rust 代理）。
+/// 本轨支持 anthropic / openai_chat / openai_responses；其余进 schema 但激活拒绝（待轨道 2：Rust 代理）。
 fn assert_format_supported(p: &config::Profile) -> Result<(), String> {
     match p.api_format.as_str() {
-        "anthropic" | "openai_chat" => Ok(()),
+        "anthropic" | "openai_chat" | "openai_responses" => Ok(()),
         other => Err(format!(
-            "api_format `{other}` 暂不支持（待 Rust 代理），请选 anthropic 或 openai_chat。"
+            "api_format `{other}` 暂不支持（待 Rust 代理），请选 anthropic、openai_chat 或 openai_responses。"
         )),
     }
 }
@@ -116,7 +116,9 @@ fn looks_like_anthropic_endpoint(base_url: &str) -> bool {
 }
 
 fn reject_openai_custom_anthropic_base(template_id: &str, base_url: &str) -> Result<(), String> {
-    if template_id == "custom-openai" && looks_like_anthropic_endpoint(base_url) {
+    if matches!(template_id, "custom-openai" | "custom-openai-responses")
+        && looks_like_anthropic_endpoint(base_url)
+    {
         Err("这个地址看起来是 Anthropic 兼容端点。请改选「自定义 Anthropic」，或使用 OpenAI 兼容 base root（如 https://api.moonshot.cn/v1）。".to_string())
     } else {
         Ok(())
@@ -128,8 +130,8 @@ fn is_native_adapter(adapter: &str) -> bool {
     adapter == "deepseek" || adapter == "qwen"
 }
 
-fn is_openai_custom_adapter(adapter: &str) -> bool {
-    adapter == "openai-custom"
+fn is_openai_adapter(adapter: &str) -> bool {
+    matches!(adapter, "openai-custom" | "openai-responses")
 }
 
 /// 上游主机名（供 status 上游灯做 TCP 可达性探测）。relay 家族从其 base_url 解析。
@@ -465,7 +467,7 @@ fn start_proxy_for(
             .env(launch.key_env, &launch.key);
         // 非 native 家族：base_url + 选中模型经环境变量交给代理（均非密钥，但与 key 一致走 env）。
         if !native {
-            if is_openai_custom_adapter(&launch.adapter) {
+            if is_openai_adapter(&launch.adapter) {
                 cmd.env("CSSWITCH_OPENAI_BASE_URL", &launch.base_url);
                 if !launch.model.is_empty() {
                     cmd.env("CSSWITCH_OPENAI_MODEL", &launch.model);
@@ -2053,6 +2055,20 @@ mod tests {
         assert_eq!(c.key_env, "CSSWITCH_OPENAI_KEY");
         assert_eq!(c.base_url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(c.model, "glm-4.5");
+
+        let custom_responses = Profile {
+            template_id: "custom-openai-responses".into(),
+            api_format: "openai_responses".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: "ok".into(),
+            model: "gpt-5.2".into(),
+            ..Default::default()
+        };
+        let d = proxy_args_for(&custom_responses);
+        assert_eq!(d.adapter, "openai-responses");
+        assert_eq!(d.key_env, "CSSWITCH_OPENAI_KEY");
+        assert_eq!(d.base_url, "https://api.openai.com/v1");
+        assert_eq!(d.model, "gpt-5.2");
     }
 
     #[test]
@@ -2076,6 +2092,11 @@ mod tests {
             ..p
         };
         assert!(assert_format_supported(&ok2).is_ok());
+        let ok3 = Profile {
+            api_format: "openai_responses".into(),
+            ..ok2
+        };
+        assert!(assert_format_supported(&ok3).is_ok());
     }
 
     #[test]
@@ -2090,6 +2111,11 @@ mod tests {
             reject_openai_custom_anthropic_base("custom-openai", "https://api.moonshot.cn/v1",)
                 .is_ok()
         );
+        assert!(reject_openai_custom_anthropic_base(
+            "custom-openai-responses",
+            "https://api.moonshot.cn/anthropic",
+        )
+        .is_err());
         assert!(
             reject_openai_custom_anthropic_base("custom", "https://api.moonshot.cn/anthropic",)
                 .is_ok()
@@ -2101,6 +2127,10 @@ mod tests {
         assert_eq!(key_env_for_adapter("deepseek"), "DEEPSEEK_API_KEY");
         assert_eq!(key_env_for_adapter("qwen"), "DASHSCOPE_API_KEY");
         assert_eq!(key_env_for_adapter("openai-custom"), "CSSWITCH_OPENAI_KEY");
+        assert_eq!(
+            key_env_for_adapter("openai-responses"),
+            "CSSWITCH_OPENAI_KEY"
+        );
         assert_eq!(key_env_for_adapter("relay"), "CSSWITCH_RELAY_KEY");
         assert_eq!(key_env_for_adapter("anything-else"), "CSSWITCH_RELAY_KEY");
     }
@@ -2406,11 +2436,12 @@ mod tests {
     }
 
     #[test]
-    fn list_templates_has_ten() {
+    fn list_templates_has_eleven() {
         let v = build_list_templates();
-        assert_eq!(v.len(), 10);
+        assert_eq!(v.len(), 11);
         assert!(v.iter().any(|t| t["id"] == "custom"));
         assert!(v.iter().any(|t| t["id"] == "custom-openai"));
+        assert!(v.iter().any(|t| t["id"] == "custom-openai-responses"));
         assert!(v.iter().any(|t| t["id"] == "kimi"));
         assert!(v.iter().any(|t| t["id"] == "minimax"));
     }

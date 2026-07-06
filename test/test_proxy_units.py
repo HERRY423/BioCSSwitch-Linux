@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proxy"))
@@ -42,6 +43,84 @@ class ToolChoiceMapping(unittest.TestCase):
         self.assertEqual(out["tool_choice"], {"type": "function", "function": {"name": "grade"}})
         self.assertEqual(out["stop"], ["STOP"])
         self.assertEqual(out["top_p"], 0.5)
+
+
+class ResponsesMapping(unittest.TestCase):
+    def setUp(self):
+        cs.PROV = dict(cs.PROVIDERS["openai-responses"])
+        cs.PROV_NAME = "openai-responses"
+        cs.PROV["default_model"] = "gpt-5.2"
+        cs.KEY = "sk-openai"
+        cs.RELAY_FORCE_MODEL = "gpt-5.2"
+
+    def tearDown(self):
+        cs.RELAY_FORCE_MODEL = None
+
+    def test_responses_request_maps_prompt_tools_and_limits(self):
+        req = {
+            "model": "claude-opus-4-8",
+            "system": [{"type": "text", "text": "be brief"}],
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 999999,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "tools": [{"name": "lookup", "description": "search", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "tool", "name": "lookup"},
+        }
+        out = cs.anthropic_to_openai_responses(req)
+        self.assertEqual(out["model"], "gpt-5.2")
+        self.assertEqual(out["instructions"], "be brief")
+        self.assertEqual(out["input"], [{"role": "user", "content": "hi"}])
+        self.assertEqual(out["max_output_tokens"], 65536)
+        self.assertEqual(out["temperature"], 0.2)
+        self.assertEqual(out["top_p"], 0.9)
+        self.assertEqual(out["tools"][0]["type"], "function")
+        self.assertEqual(out["tools"][0]["name"], "lookup")
+        self.assertEqual(out["tool_choice"], "auto")
+
+    def test_responses_tool_choice_none_passthrough(self):
+        out = cs.anthropic_to_openai_responses({
+            "model": "claude-opus-4-8",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_choice": {"type": "none"},
+        })
+        self.assertEqual(out["tool_choice"], "none")
+
+    def test_responses_request_maps_tool_results(self):
+        req = {
+            "model": "claude-opus-4-8",
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"q": "x"}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": [{"type": "text", "text": "found"}]},
+                ]},
+            ],
+        }
+        out = cs.anthropic_to_openai_responses(req)
+        self.assertEqual(out["input"][0], {"role": "assistant", "content": "checking"})
+        self.assertEqual(out["input"][1]["type"], "function_call")
+        self.assertEqual(out["input"][1]["call_id"], "call_1")
+        self.assertEqual(json.loads(out["input"][1]["arguments"]), {"q": "x"})
+        self.assertEqual(out["input"][2], {"type": "function_call_output", "call_id": "call_1", "output": "found"})
+
+    def test_responses_response_maps_text_and_function_call(self):
+        resp = {
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{\"q\":\"y\"}"},
+            ],
+            "usage": {"input_tokens": 4, "output_tokens": 5},
+        }
+        out = cs.openai_responses_to_anthropic(resp, "claude-opus-4-8")
+        self.assertEqual(out["content"][0], {"type": "text", "text": "hello"})
+        self.assertEqual(out["content"][1], {"type": "tool_use", "id": "call_2", "name": "lookup", "input": {"q": "y"}})
+        self.assertEqual(out["stop_reason"], "tool_use")
+        self.assertEqual(out["usage"], {"input_tokens": 4, "output_tokens": 5})
 
 
 class RelayProvider(unittest.TestCase):
@@ -162,11 +241,16 @@ class OpenAICustomProvider(unittest.TestCase):
     def test_openai_base_root_normalization(self):
         root = "https://open.bigmodel.cn/api/paas/v4"
         self.assertEqual(cs.normalize_openai_base(root + "/chat/completions"), root)
+        self.assertEqual(cs.normalize_openai_base(root + "/responses"), root)
         self.assertEqual(cs.normalize_openai_base(root + "/models"), root)
         self.assertEqual(cs.openai_endpoint(root + "/chat/completions", "/models"), root + "/models")
         self.assertEqual(
             cs.openai_endpoint(root + "/models", "/chat/completions"),
             root + "/chat/completions",
+        )
+        self.assertEqual(
+            cs.openai_endpoint(root + "/responses", "/responses"),
+            root + "/responses",
         )
         self.assertEqual(
             cs.openai_endpoint("https://api.siliconflow.cn", "/chat/completions"),

@@ -87,7 +87,7 @@ pub fn scratch_env(
 ) -> Vec<(String, String)> {
     let mut v = vec![(key_env.to_string(), key.to_string())];
     if !base_url.is_empty() {
-        let env = if provider == "openai-custom" {
+        let env = if matches!(provider, "openai-custom" | "openai-responses") {
             "CSSWITCH_OPENAI_BASE_URL"
         } else {
             "CSSWITCH_RELAY_BASE_URL"
@@ -96,7 +96,7 @@ pub fn scratch_env(
     }
     if let Some(m) = model {
         if !m.is_empty() {
-            let env = if provider == "openai-custom" {
+            let env = if matches!(provider, "openai-custom" | "openai-responses") {
                 "CSSWITCH_OPENAI_MODEL"
             } else {
                 "CSSWITCH_RELAY_MODEL"
@@ -104,7 +104,7 @@ pub fn scratch_env(
             v.push((env.to_string(), m.to_string()));
         }
     }
-    if provider != "openai-custom" && !relay_thinking.is_empty() {
+    if !matches!(provider, "openai-custom" | "openai-responses") && !relay_thinking.is_empty() {
         v.push((
             "CSSWITCH_RELAY_THINKING".to_string(),
             relay_thinking.to_string(),
@@ -324,6 +324,29 @@ mod tests {
                     "https://open.bigmodel.cn/api/paas/v4".to_string()
                 ),
                 ("CSSWITCH_OPENAI_MODEL".to_string(), "glm-4.5".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn scratch_env_openai_responses_sets_openai_base_and_model() {
+        let env = scratch_env(
+            "openai-responses",
+            "CSSWITCH_OPENAI_KEY",
+            "sk-z",
+            "https://api.openai.com/v1",
+            Some("gpt-5.2"),
+            "enabled",
+        );
+        assert_eq!(
+            env,
+            vec![
+                ("CSSWITCH_OPENAI_KEY".to_string(), "sk-z".to_string()),
+                (
+                    "CSSWITCH_OPENAI_BASE_URL".to_string(),
+                    "https://api.openai.com/v1".to_string()
+                ),
+                ("CSSWITCH_OPENAI_MODEL".to_string(), "gpt-5.2".to_string()),
             ]
         );
     }

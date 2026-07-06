@@ -1,6 +1,7 @@
 """测试用假上游：记账命中次数，按 mode 返回不同响应。
 mode="json"：返回一份最小 Anthropic 非流式消息体。
-mode="status:NNN"：返回 HTTP NNN + 一小段错误 JSON（测代理对上游错误码的处理，如 P3 401/403 透传）。"""
+mode="status:NNN"：返回 HTTP NNN + 一小段错误 JSON（测代理对上游错误码的处理，如 P3 401/403 透传）。
+mode="openai_responses"：返回一份最小 OpenAI Responses 响应体。"""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,9 +16,32 @@ def start_mock(mode="json"):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
-            self.rfile.read(n)
+            raw = self.rfile.read(n)
             hits.append(self.path)
-            if mode == "json":
+            if mode == "openai_responses":
+                try:
+                    req = json.loads(raw or b"{}")
+                except Exception:
+                    req = {}
+                body = json.dumps({
+                    "id": "resp_mock",
+                    "object": "response",
+                    "status": "completed",
+                    "model": req.get("model", "mock"),
+                    "output": [{
+                        "id": "msg_mock",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok-responses"}],
+                    }],
+                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif mode == "json":
                 body = json.dumps({
                     "id": "msg_mock", "type": "message", "role": "assistant",
                     "model": "mock", "content": [{"type": "text", "text": "ok"}],
