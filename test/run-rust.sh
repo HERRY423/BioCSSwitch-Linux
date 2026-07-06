@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# S0 rust 层：cargo fmt+clippy+test。无 cargo → env-blocked。无 loopback → 跳过端口 bind 测试并标 env-blocked 子集。
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT/desktop/src-tauri"
+
+if ! command -v cargo >/dev/null 2>&1; then
+  [ -x "$HOME/.cargo/bin/cargo" ] && export PATH="$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "S0_LAYER rust env-blocked (no cargo)"; exit 0
+fi
+
+fail=0
+cargo fmt --check || fail=1
+cargo clippy --all-targets -- -D warnings || fail=1
+# 端口 bind 测试名单（Step 1 定位于 scratch.rs；无 loopback 时 skip 并标 env-blocked）
+PORT_TESTS="pick_scratch_port_returns_usable_nonreserved_port two_picks_are_bindable"
+if [ "$(python3 "$ROOT/test/_capability.py")" = "1" ]; then
+  cargo test || fail=1
+else
+  echo "loopback 禁 → 跳过端口 bind 测试（env-blocked 子集）：$PORT_TESTS"
+  skip_args=""; for t in $PORT_TESTS; do skip_args="$skip_args --skip $t"; done
+  cargo test -- $skip_args || fail=1
+fi
+
+if [ "$fail" -eq 0 ]; then echo "S0_LAYER rust pass"; exit 0; else echo "S0_LAYER rust fail"; exit 1; fi

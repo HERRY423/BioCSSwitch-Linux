@@ -13,9 +13,12 @@ import threading
 import time
 import unittest
 
+sys.path.insert(0, os.path.dirname(__file__))
+from _capability import loopback_available
+
 HERE = os.path.dirname(__file__)
 PROXY = os.path.join(HERE, "..", "proxy", "csswitch_proxy.py")
-PORT = 18994
+PORT = 18976  # S0 全局唯一端口：ProxyConnect
 BASE = ("127.0.0.1", PORT)
 
 
@@ -66,6 +69,7 @@ def _start_echo():
     return port, srv
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class ProxyConnect(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

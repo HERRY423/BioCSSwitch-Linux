@@ -17,6 +17,9 @@ import threading
 import time
 import unittest
 
+sys.path.insert(0, os.path.dirname(__file__))
+from _capability import loopback_available
+
 HERE = os.path.dirname(__file__)
 PROXY = os.path.join(HERE, "..", "proxy", "csswitch_proxy.py")
 SEC = "dsmltok"
@@ -160,13 +163,14 @@ def launch_proxy(port, shim_mode, upstream):
     return proc
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class DsmlRewriteWired(unittest.TestCase):
     """rewrite 模式：DSML 泄漏被还原成真正的 tool_use（P0 已接通的核心证明）。"""
 
     @classmethod
     def setUpClass(cls):
         cls.up_url, cls.up_sock = start_dsml_upstream()
-        cls.port = 18993
+        cls.port = 18974  # S0 全局唯一端口：DsmlRewriteWired
         cls.proc = launch_proxy(cls.port, "rewrite", cls.up_url)
 
     @classmethod
@@ -197,13 +201,14 @@ class DsmlRewriteWired(unittest.TestCase):
         self.assertEqual(obj["stop_reason"], "tool_use")
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class DsmlOffIsVerbatim(unittest.TestCase):
     """off 模式（默认）：字节级透传，DSML 仍是文本、无 tool_use（零回归护栏）。"""
 
     @classmethod
     def setUpClass(cls):
         cls.up_url, cls.up_sock = start_dsml_upstream()
-        cls.port = 18994
+        cls.port = 18975  # S0 全局唯一端口：DsmlOffIsVerbatim
         cls.proc = launch_proxy(cls.port, None, cls.up_url)   # 不设 env → 默认 off
 
     @classmethod

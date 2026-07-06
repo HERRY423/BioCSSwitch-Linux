@@ -24,16 +24,20 @@ Providers:
 import argparse
 import json
 import os
+import queue
 import re
 import select
 import socket
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import dsml_shim
+import provider_policy
+import anthropic_compat
 
 # DSML 兜底 shim 的运行模式：off（默认，字节级透传）/ detect（透传 + 遥测）/ rewrite（改写）。
 # 由 __main__ 依 shim_mode(PROV_NAME, PROV) 覆写（读环境变量 CSSWITCH_TOOLUSE_SHIM）。
@@ -136,7 +140,6 @@ KEY = None       # 当前 provider 的 key，只驻内存
 LOG = None
 PROV_NAME = None  # 运行时设定；模块被 import 做测试时也要有定义，避免 handler NameError
 AUTH_SECRET = None  # 未设则不启用鉴权（保持旧行为）
-_DATE_SUFFIX = re.compile(r"-\d{8}$")
 # relay 模式：最近一次 /v1/models 回源拉到的上游模型 id 列表。resolve_model 用它把
 # Science 发来的裸 id（如标题 agent 的 claude-haiku-4-5）贴合到中转站真实 id
 # （如 claude-haiku-4-5-20251001）。首拉前为空 → 纯透传。
@@ -196,90 +199,18 @@ def load_key(prov, args):
     return None
 
 
-def _snap_relay_model(name):
-    """relay 透传：把请求模型贴合到中转站真实 id。精确命中优先；否则找一个以
-    请求名为前缀的上游 id（裸 claude-haiku-4-5 → claude-haiku-4-5-20251001）；
-    都不中就原样返回（中转站自行处理别名 / 报错）。"""
-    if not RELAY_MODELS or name in RELAY_MODELS:
-        return name
-    for mid in RELAY_MODELS:
-        if mid.startswith(name + "-") or mid == name:
-            return mid
-    return name
-
-
-def resolve_model(name):
-    """把 Science 传来的模型名解析成当前 provider 的目标模型。
-    优先：relay 强制模型 override > 选择器选中名 > 显式映射 > 去日期后缀 > 前缀匹配 > 默认。"""
-    if PROV.get("force_model_override") and RELAY_FORCE_MODEL:
-        return RELAY_FORCE_MODEL   # relay/openai-custom 选了模型：强制覆盖一切（含裸 claude-* 与空名）
-    if not name:
-        return PROV["default_model"]
-    if PROV.get("passthrough"):   # relay 留空：中转站原生认 claude-*，透传（仅贴合到真实 id）
-        return _snap_relay_model(name)
-    mm = PROV["model_map"]
-    if name in mm:          # 先查映射（覆盖伪 claude- 前缀的选择器 id 和 Science 硬编码 claude-*）
-        return mm[name]
-    ids = {m[0] for m in PROV["models"]}
-    if name in ids:         # provider 原生 id（如 qwen-max）直接用
-        return name
-    stripped = _DATE_SUFFIX.sub("", name)
-    if stripped in mm:
-        return mm[stripped]
-    for k, v in mm.items():
-        if name.startswith(k) or stripped.startswith(k):
-            return v
-    return PROV["default_model"]
-
-
-def _enabled_budget(max_tokens):
-    """thinking:enabled 需 budget_tokens，且必须 < max_tokens（留 token 给输出）。
-    默认 1024，按 max_tokens 收敛，最低 1（Kimi 真机接受小 budget）。"""
-    default = 1024
-    if isinstance(max_tokens, int) and max_tokens > 0:
-        return max(1, min(default, max_tokens - 1))
-    return default
-
-
-def normalize_thinking(body, prov_name, relay_thinking=None):
-    """thinking 归一化（纯函数，便于测试）。按 provider + relay 策略处理
-    （spec v3 §3.1，真机 §3.5 修正为 per-provider）：
-      (A) 强制 tool_choice(any/tool) 时关 thinking——【仅 deepseek】：flash 默认开思考，
-          即便 thinking=null 也与强制工具冲突，故无条件置 disabled。
-      (B) relay 的 thinking 策略（relay_thinking，来自模板 thinking_policy，
-          经 CSSWITCH_RELAY_THINKING 注入）：
-          - "enabled"（如 Kimi：模型强制 thinking.type=enabled，缺失/auto/其它都 400）
-            → 归一成 {type:enabled, budget_tokens}（保留已有的 enabled）。
-          - "adaptive"/None（默认，如 MiniMax 及 glm/xiaomi/…）→ auto→adaptive（上游认 adaptive）。
-      (C) deepseek 非强制 + auto → adaptive（DeepSeek 认 adaptive）。
-    原地修改并返回 body。"""
-    tc = body.get("tool_choice")
-    forcing = isinstance(tc, dict) and tc.get("type") in ("any", "tool")
-    if forcing and prov_name == "deepseek":
-        body["thinking"] = {"type": "disabled"}
-        return body
-    if prov_name == "relay" and relay_thinking == "enabled":
-        th = body.get("thinking")
-        if not (isinstance(th, dict) and th.get("type") == "enabled"):
-            body["thinking"] = {"type": "enabled",
-                                "budget_tokens": _enabled_budget(body.get("max_tokens"))}
-        return body
-    th = body.get("thinking")
-    if isinstance(th, dict) and th.get("type") == "auto":
-        th = dict(th)
-        th["type"] = "adaptive"
-        body["thinking"] = th
-    return body
-
-
-def clamp_max_tokens(v, model=None):
-    if not v:
-        return v
-    caps = PROV.get("model_caps") or {}
-    cap = caps.get(model, PROV.get("default_cap"))
-    if cap:
-        return min(int(v), cap)
-    return v
+def _provider_state(areq):
+    """从模块全局一次性组装 ProviderState（骨架侧），传给 compat / policy。
+    nonce_factory 捕获 areq，保留旧 id(areq) 派生（字节级等价）。"""
+    return provider_policy.ProviderState(
+        policy=provider_policy.policy_from_prov(PROV),
+        prov_name=PROV_NAME,
+        relay_force_model=RELAY_FORCE_MODEL,
+        relay_models=RELAY_MODELS,
+        relay_thinking=RELAY_THINKING,
+        shim_mode=SHIM_MODE,
+        nonce_factory=lambda: f"{id(areq) & 0xffffff:x}",
+    )
 
 
 def http_post(url, data, headers, attempts=4, timeout=300):
@@ -302,14 +233,14 @@ def http_post(url, data, headers, attempts=4, timeout=300):
 
 
 def open_stream(url, data, headers, attempts=4, timeout=300):
-    """打开上游流式连接并预读首块（把「200 但立刻空体」这种抖动也纳入重试）。
+    """打开上游流式连接并预读首行（把「200 但立刻空体」这种抖动也纳入重试）。
     返回 (resp, first_chunk, content_type)；首字节到手后不再重试。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
     for i in range(attempts):
         req = urllib.request.Request(url, data=data, headers=headers)
         try:
             r = urllib.request.urlopen(req, timeout=timeout)
-            first = r.read(4096)
+            first = r.readline(65536)
             if not first:
                 r.close()
                 raise ConnectionError("上游 200 但立刻空体")
@@ -322,6 +253,32 @@ def open_stream(url, data, headers, attempts=4, timeout=300):
                 time.sleep(0.8 * (i + 1))
                 continue
             raise
+
+
+def _open_stream_with_keepalive(write_chunk, url, data, headers):
+    """等待上游首帧时持续给下游发 SSE 注释心跳。
+
+    下游主请求可能带大量工具定义；部分上游首帧 TTFT 较长时，如果下游在这段
+    时间完全收不到 body 字节，会先断开并重试。注释帧是合法 SSE，客户端应忽略内容，
+    但能证明连接仍活着。"""
+    q = queue.Queue(maxsize=1)
+
+    def _open():
+        try:
+            q.put(("ok", open_stream(url, data, headers)))
+        except BaseException as e:
+            q.put(("err", e))
+
+    threading.Thread(target=_open, daemon=True).start()
+    keepalive = b": csswitch-keepalive\n\n"
+    while True:
+        try:
+            kind, payload = q.get(timeout=1.0)
+            if kind == "err":
+                raise payload
+            return payload
+        except queue.Empty:
+            write_chunk(keepalive)
 
 
 def http_get_json(url, headers, attempts=3, timeout=30):
@@ -488,9 +445,11 @@ def anthropic_to_openai(req):
                 msgs.append({"role": role, "content": "".join(text_parts)})
         else:
             msgs.append({"role": role, "content": "".join(text_parts)})
-    out = {"model": resolve_model(req.get("model")), "messages": msgs, "stream": False}
+    _st = _provider_state(req)
+    out = {"model": provider_policy.resolve_model(req.get("model"), _st),
+           "messages": msgs, "stream": False}
     if req.get("max_tokens"):
-        out["max_tokens"] = clamp_max_tokens(req["max_tokens"], out["model"])
+        out["max_tokens"] = provider_policy.clamp_max_tokens(req["max_tokens"], out["model"], _st)
     if req.get("temperature") is not None:
         out["temperature"] = req["temperature"]
     if req.get("tools"):
@@ -582,6 +541,7 @@ class H(BaseHTTPRequestHandler):
             ensure_ascii=False) + "\n\n").encode()
         self.wfile.write(hex(len(frame))[2:].encode() + b"\r\n" + frame + b"\r\n")
         self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
 
     def _auth_ok(self):
         if not AUTH_SECRET:
@@ -730,110 +690,99 @@ class H(BaseHTTPRequestHandler):
 
     # ---- DeepSeek：Anthropic 原生透传（改模型名+换鉴权+夹 max_tokens+重试） ----
     def _handle_anthropic(self, areq):
-        src = areq.get("model", "?")
-        target = resolve_model(src)
-        body = dict(areq)
-        body["model"] = target
-        if body.get("max_tokens"):
-            body["max_tokens"] = clamp_max_tokens(body["max_tokens"], target)
-        # thinking 归一化（spec v3 §3.1 + 真机 §3.5 per-provider）：(A) forced→disabled 仅 deepseek；
-        # (B) relay 按模板策略：adaptive（MiniMax 等）/ enabled（Kimi）。见 normalize_thinking。
-        normalize_thinking(body, PROV_NAME, RELAY_THINKING)
-        stream = bool(body.get("stream"))
-        n_tools = len(body.get("tools") or [])
-        log(f"POST /v1/messages  {src}->{target} stream={stream} tools={n_tools} "
-            f"msgs={len(body.get('messages') or [])}  (入站鉴权已剥离, 直连 {PROV_NAME})")
-        # 鉴权头按 provider 的 auth_style：deepseek 默认 x-api-key；relay 用 both（同时带
-        # x-api-key + Authorization: Bearer，兼容各家中转站）。KEY 只驻内存、不入日志。
+        state = _provider_state(areq)
+        upstream_body, ctx = anthropic_compat.transform_request(areq, state)
+        stream = bool(upstream_body.get("stream"))
+        n_tools = len(upstream_body.get("tools") or [])
+        log(f"POST /v1/messages  {ctx.src_model}->{ctx.target_model} stream={stream} "
+            f"tools={n_tools} msgs={len(upstream_body.get('messages') or [])}  "
+            f"(入站鉴权已剥离, 直连 {PROV_NAME})")
+        # 鉴权头按 provider 的 auth_style（deepseek x-api-key / relay both）。KEY 只驻内存、不入日志。
         headers = {"content-type": "application/json", "anthropic-version": "2023-06-01"}
         headers.update(_upstream_auth_headers())
-        data = json.dumps(body).encode()
-        # DSML 兜底：仅当模式为 detect/rewrite 且本请求确有工具时才介入（无工具 = 无工具调用可泄漏）。
-        # off（默认）与无工具场景：走下面「原样透传」分支，字节级不变、零回归。
-        known_tools = {t["name"]: (t.get("input_schema") or {})
-                       for t in (body.get("tools") or [])
-                       if isinstance(t, dict) and t.get("name")}
-        shim_on = SHIM_MODE in ("detect", "rewrite") and bool(known_tools)
-        nonce = f"{id(areq) & 0xffffff:x}"
+        data = json.dumps(upstream_body).encode()
         headers_sent = False
         try:
             if stream:
-                r, first, ct = open_stream(PROV["url"], data, headers)
+                # Deliberate stream tradeoff: open the downstream SSE response before
+                # upstream TTFT, then send comment keepalives while waiting. This keeps
+                # the client from retrying long tool-heavy requests, but upstream
+                # HTTP errors after this point must be represented as SSE error frames
+                # because the HTTP status line is already committed.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.flush()
+                headers_sent = True
+
+                def _wc(b):
+                    if b:
+                        self.wfile.write(hex(len(b))[2:].encode() + b"\r\n" + b + b"\r\n")
+                        self.wfile.flush()
+
+                r, first, _ct = _open_stream_with_keepalive(_wc, PROV["url"], data, headers)
                 with r:
-                    self.send_response(200)
-                    self.send_header("Content-Type", ct)
-                    self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Transfer-Encoding", "chunked")
-                    self.end_headers()
-                    headers_sent = True
-
-                    def _wc(b):
-                        if b:
-                            self.wfile.write(hex(len(b))[2:].encode() + b"\r\n" + b + b"\r\n")
-
-                    rw = dsml_shim.DsmlStreamRewriter(known_tools, nonce=nonce) \
-                        if (shim_on and SHIM_MODE == "rewrite") else None
-                    det = dsml_shim.DsmlDetector() if (shim_on and SHIM_MODE == "detect") else None
-                    # 第一帧同样要过 shim（状态机/检测器必须从第 0 字节按序看到全部上游数据）。
-                    if rw is not None:
-                        _wc(rw.feed(first))
+                    # off / 无工具 → None（骨架直接透传，零开销）；detect / rewrite → 统一 filter。
+                    f = anthropic_compat.make_stream_rewriter(ctx)
+                    # 第一帧同样要过 filter（状态机 / 检测器必须从第 0 字节按序看到全部上游数据）。
+                    if f is not None:
+                        _wc(f.feed(first))
                     else:
                         _wc(first)
-                        if det is not None:
-                            det.feed(first)
                     while True:
                         try:
-                            chunk = r.read(4096)
+                            chunk = r.readline(65536)
                         except Exception as e:
                             log(f"  !! 流中断（头已发），SSE error 收尾: {e}")
                             self._sse_error_and_terminate(str(e))
                             return
                         if not chunk:
                             break
-                        if rw is not None:
-                            _wc(rw.feed(chunk))
+                        if f is not None:
+                            _wc(f.feed(chunk))
                         else:
                             _wc(chunk)
-                            if det is not None:
-                                det.feed(chunk)
-                    if rw is not None:
-                        _wc(rw.finalize())
+                    if f is not None:
+                        _wc(f.finalize())
                     self.wfile.write(b"0\r\n\r\n")
-                if rw is not None and rw.synthesized:
-                    log(f"  <- {PROV_NAME} 流式 DSML 改写 OK（合成 tool_use×{rw.tool_n}）")
-                elif det is not None and det.found:
+                    self.wfile.flush()
+                st = f.stats() if f is not None else {}
+                if st.get("synthesized"):
+                    log(f"  <- {PROV_NAME} 流式 DSML 改写 OK（合成 tool_use×{st['tool_n']}）")
+                elif st.get("found"):
                     log(f"  <- {PROV_NAME} 流式透传 OK（!! detect：本响应含 DSML 泄漏，未改写）")
                 else:
                     log(f"  <- {PROV_NAME} 流式透传 OK")
             else:
                 body_bytes, ct = http_post(PROV["url"], data, headers)
-                if shim_on and SHIM_MODE == "rewrite":
-                    new_bytes = dsml_shim.rewrite_nonstream_body(body_bytes, known_tools, nonce=nonce)
-                    if new_bytes != body_bytes:
-                        log(f"  <- {PROV_NAME} 非流式 DSML 改写 OK（展开 tool_use）")
-                    body_bytes = new_bytes
-                elif shim_on and SHIM_MODE == "detect":
-                    det = dsml_shim.DsmlDetector()
-                    det.feed(body_bytes)
-                    if det.found:
-                        log(f"  !! detect：非流式响应含 DSML 泄漏，未改写")
+                body_bytes, stats = anthropic_compat.rewrite_nonstream(body_bytes, ctx)
+                if stats.get("rewritten"):
+                    log(f"  <- {PROV_NAME} 非流式 DSML 改写 OK（展开 tool_use）")
+                elif stats.get("found"):
+                    log(f"  !! detect：非流式响应含 DSML 泄漏，未改写")
                 self.send_response(200)
                 self.send_header("Content-Type", ct)
                 self.send_header("Content-Length", str(len(body_bytes)))
                 self.end_headers()
                 headers_sent = True
                 self.wfile.write(body_bytes)
-                if not (shim_on and SHIM_MODE == "rewrite"):
+                if "rewritten" not in stats:
                     log(f"  <- {PROV_NAME} 非流式透传 OK")
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:400]
             log(f"  !! 上游 HTTP {e.code}: {detail}")
             if not headers_sent:
-                # 修 P3（GPT 复审）：上游鉴权/额度类状态码原样透传，让上层（verify_key）能区分
-                # key 无效(401/403)与限流(429)；其余上游错误仍归一化为 502。
+                # 上游鉴权 / 额度类状态码原样透传（401/403/429），其余归一化 502。
                 code = e.code if e.code in (401, 403, 429) else 502
                 self._send_json(code, {"type": "error", "error": {
                     "type": "api_error", "message": f"upstream {e.code}: {detail}"}})
+            else:
+                try:
+                    self._sse_error_and_terminate(f"upstream {e.code}: {detail}")
+                except Exception:
+                    pass
         except Exception as e:
             log(f"  !! 代理异常: {e}")
             if headers_sent:
