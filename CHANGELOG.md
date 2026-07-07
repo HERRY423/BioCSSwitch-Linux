@@ -174,6 +174,62 @@
 
 ### 未验证
 - Claude Science 的 MCP 配置文件位置与 Skill 目录**尚未从二进制逆向确认**。当前按 Claude Code 惯例落 `<data-dir>/mcp-servers.json` 和 `<data-dir>/skills/<id>/`（见 `packs::MCP_CONFIG_REL` / `SKILLS_REL`）。逆向后只需改这两个常量。
+
+## [Unreleased]
+
+## [0.3.6] — 2026-07-06
+
+> 主题：**自定义 OpenAI Responses provider 预览支持**。这版新增 OpenAI Responses 兼容端点路径，并针对 DashScope Responses 兼容模式收紧工具调用与输出预算边界。
+
+### 新增 Added
+- **自定义 OpenAI Responses 兼容端点**：新增「自定义 OpenAI Responses」来源，用户填写 OpenAI 兼容 base root、模型与 key 后，代理自动拼接 `/responses` 与 `/models`，并在 Anthropic Messages 与 OpenAI Responses 之间做基础转换。
+
+### 修复 Fixed
+- **DashScope Responses 工具请求稳定性**：带工具的 Responses 请求会保守降级强制工具选择并收紧输出预算，避免兼容层因工具选择或过大输出预算拒绝请求。
+- **DashScope Responses 工具 schema 兼容性**：过滤当前兼容模式不接受的内置搜索工具定义，并对工具参数根 schema 做保守归一化，避免整个请求被上游 schema 校验拒绝。
+
+### 说明 Notes
+- Responses 路径当前以非流式上游请求完成后本地回放 Anthropic SSE，尚不宣称原生 Responses SSE 增量转换。
+- Responses 路径会对 `max_output_tokens` 应用上限，并将强制工具选择保守降级为 `auto`，以兼容更严格的 Responses 兼容端点；DashScope 工具请求使用更保守的预算。
+
+## [0.3.5] — 2026-07-06
+
+> 主题：**API/provider 稳定性基线**。这版把 Anthropic 兼容 provider 的关键路径拆清楚，强化 Kimi / DeepSeek / 自定义 Anthropic 等路径的流式、错误与工具调用兼容性，作为后续 provider capability / matrix 工作的稳定底座。
+
+### 变更 Changed
+- **Anthropic 兼容路径抽取**：将 provider 选择策略与 Anthropic 兼容协议处理拆到独立模块，降低代理主入口复杂度，方便后续扩展和回归。
+- **provider 行为更显式**：把 relay / native / custom 等运行策略统一收口，减少不同来源切换时的隐式分支和旧状态复用风险。
+
+### 修复 Fixed
+- **Kimi 工具兼容性兜底**：过滤 Kimi 当前不支持的 server-side tool 定义，避免兼容端点因工具 schema 差异拒绝请求。
+- **流式错误与 keepalive 合同**：收紧 SSE keepalive、上游错误透传与结束帧行为，避免 provider 报错时表现成不清晰的悬挂或半截输出。
+
+### 说明 Notes
+- 验证：`test/run_all.sh` 全层通过；Anthropic 兼容与 provider policy 单测通过；桌面侧 clippy / fmt / JS 语法检查通过；DeepSeek 流式与非流式样例请求完成。Kimi 测试中遇到的失败为上游额度限制返回 429，不归类为本版代理回归。
+
+## [0.3.4] — 2026-07-05
+
+### 修复 Fixed
+- **自定义 OpenAI 填错 Anthropic 地址的防呆**：如果在「自定义 OpenAI」里填写 `https://.../anthropic` 这类 Anthropic 兼容端点，现在新建、编辑、获取模型、激活都会明确提示改用「自定义 Anthropic」，避免把 Kimi / 其它 Anthropic 兼容地址误拼成 OpenAI Chat Completions 路径。
+
+## [0.3.3] — 2026-07-05
+
+> 主题：**自定义 OpenAI 兼容 API 真正可用**。把原先只服务通义千问的 OpenAI Chat Completions 翻译路径泛化，补上独立的「自定义 OpenAI」来源，让任意 OpenAI 兼容 base root + key + model 可经 CSSwitch 转成 Claude Science 可用的 Anthropic `/v1/messages`。
+
+### 新增 Added
+- **自定义 OpenAI 兼容端点**：新增独立模板「自定义 OpenAI」，与「自定义 Anthropic」分开保存。用户填写 OpenAI 兼容 base root、模型与 key 后，代理负责把 Anthropic 请求翻译为 OpenAI Chat Completions，再把响应翻回 Anthropic。
+- **OpenAI base root 容错**：支持 `https://.../v1`、`https://.../api/paas/v4` 这类版本段地址；用户误填到 `/chat/completions` 或 `/models` 结尾时会收敛回 root，避免双拼路径。裸 host/root 会按 OpenAI 惯例补 `/v1`。
+
+### 修复 Fixed
+- **自定义 OpenAI 配置保存了但实际仍走 relay/qwen 硬编码路径**：新增 `openai-custom` adapter 身份，补齐 key env、base_url/model env、scratch 校验、模型发现和正式启动链路，运行时不再只靠 `api_format` 字段猜协议。
+- **自定义 OpenAI「获取模型」失败**：模型发现 scratch 不再要求 `CSSWITCH_OPENAI_MODEL`；代理可以只凭 base URL + key 启动 `/v1/models` 回源，正式推理仍由 Rust 侧校验 model 必填。
+- **不同配置切换可能复用旧代理语义**：代理复用指纹纳入 `template_id`、`api_format` 与 thinking 策略；即使 adapter/base/model/key 看起来相同，只要模板协议语义不同也会重启代理，避免旧进程带着旧环境继续服务。
+- **运维自检测试仍按旧固定槽 key 语义判断**：更新 doctor 回归到多 profile 的 `CSSWITCH_KEY_PRESENT` 语义，避免测试把 shell 里的 provider key 当作真实配置来源。
+
+### 说明 Notes
+- OpenAI custom 的 thinking 本版明确降级为不映射：不会发明通用 reasoning 参数，普通请求、tool_choice、stop/top_p 与流式回放路径保持在既有翻译链内。
+- 离线验证：cargo test 124 / clippy 0 / fmt clean；`test/run_all.sh` ALL GREEN；代理单测 45；新增真实代理回归覆盖「无 `CSSWITCH_OPENAI_MODEL` 仍可获取模型」。涉及 loopback 的测试在沙箱外重跑通过，未触碰真实 `~/.claude-science` 与 8765 端口。
+
 ## [0.3.2] — 2026-07-04
 
 > 主题：**Science 顶部显示真实模型名 + 新增 Kimi / MiniMax**。修复 relay 家在 Science 模型选择器里笼统显示「claude / opus」的问题（#11），让每个服务商都能选择或自填模型、并在 Science 里显示真实模型名；新增 Kimi（Moonshot）与 MiniMax；各家内置模型更新到官方主流版本。

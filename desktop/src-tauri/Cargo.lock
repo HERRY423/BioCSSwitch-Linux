@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.3"
+version = "0.3.6"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -759,6 +759,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "url",
 ]
 
 [[package]]

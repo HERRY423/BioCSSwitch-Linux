@@ -47,14 +47,23 @@ else
 fi
 
 echo "[端口]"
+classify_port() {  # $1=port；打印占用分型
+  local p="$1" cmd
+  if [ "$((10#$p))" -eq 8765 ]; then echo "保留端口 8765（真实实例，绝不占用/干预）"; return; fi
+  cmd="$(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" (pid "$2")"}')"
+  if [ -z "$cmd" ]; then echo "空闲"; return; fi
+  local lc
+  lc="$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')"
+  case "$lc" in
+    *python*|*csswitch*|*claude-science*) echo "疑似 CSSwitch 旧进程：$cmd（可 stop_all 或手动清）" ;;
+    *) echo "未知占用：$cmd" ;;
+  esac
+}
 for p in "$PROXY_PORT" "$SANDBOX_PORT"; do
   if ! [[ "$p" =~ ^[0-9]+$ ]]; then fail "端口非法整数：$p"; continue; fi
   if [ "$((10#$p))" -eq 8765 ]; then fail "端口 $p 命中真实实例保留端口 8765（铁律禁用）"; continue; fi
-  if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
-    warn "端口 $p 已被占用（可能上次没退干净，或别的程序占了）"
-  else
-    pass "端口 $p 空闲"
-  fi
+  detail="$(classify_port "$p")"
+  if [ "$detail" = "空闲" ]; then pass "端口 $p 空闲"; else warn "端口 $p 占用分型：$detail"; fi
 done
 
 echo "[本地配置]"

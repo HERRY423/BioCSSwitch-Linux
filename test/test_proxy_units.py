@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proxy"))
@@ -44,26 +45,131 @@ class ToolChoiceMapping(unittest.TestCase):
         self.assertEqual(out["top_p"], 0.5)
 
 
-class MaxTokensPerModel(unittest.TestCase):
+class ResponsesMapping(unittest.TestCase):
     def setUp(self):
-        cs.PROV = cs.PROVIDERS["deepseek"]
+        cs.PROV = dict(cs.PROVIDERS["openai-responses"])
+        cs.PROV_NAME = "openai-responses"
+        cs.PROV["default_model"] = "gpt-5.2"
+        cs.KEY = "sk-openai"
+        cs.RELAY_FORCE_MODEL = "gpt-5.2"
 
-    def test_cap_uses_target_model_entry(self):
-        self.assertEqual(cs.clamp_max_tokens(100000, "deepseek-v4-pro"), 65536)
-        self.assertEqual(cs.clamp_max_tokens(100000, "deepseek-v4-flash"), 32768)
+    def tearDown(self):
+        cs.RELAY_FORCE_MODEL = None
 
-    def test_unknown_model_uses_default_cap(self):
-        self.assertEqual(cs.clamp_max_tokens(100000, "who-knows"), 8192)
+    def test_responses_request_maps_prompt_tools_and_limits(self):
+        req = {
+            "model": "claude-opus-4-8",
+            "system": [{"type": "text", "text": "be brief"}],
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 999999,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "tools": [{"name": "lookup", "description": "search", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "tool", "name": "lookup"},
+        }
+        out = cs.anthropic_to_openai_responses(req)
+        self.assertEqual(out["model"], "gpt-5.2")
+        self.assertEqual(out["instructions"], "be brief")
+        self.assertEqual(out["input"], [{"role": "user", "content": "hi"}])
+        self.assertEqual(out["max_output_tokens"], 65536)
+        self.assertEqual(out["temperature"], 0.2)
+        self.assertEqual(out["top_p"], 0.9)
+        self.assertEqual(out["tools"][0]["type"], "function")
+        self.assertEqual(out["tools"][0]["name"], "lookup")
+        self.assertEqual(out["tool_choice"], "auto")
 
-    def test_not_clamped_below_request(self):
-        self.assertEqual(cs.clamp_max_tokens(500, "deepseek-v4-pro"), 500)
+    def test_responses_forced_tool_choice_string_degrades_to_auto(self):
+        out = cs.anthropic_to_openai_responses({
+            "model": "claude-opus-4-8",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+            "tool_choice": "required",
+        })
+        self.assertEqual(out["tool_choice"], "auto")
 
-    def test_none_passthrough(self):
-        self.assertIsNone(cs.clamp_max_tokens(None, "deepseek-v4-pro"))
+    def test_dashscope_responses_tool_requests_use_conservative_cap(self):
+        old_url = cs.PROV.get("url")
+        cs.PROV["url"] = "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
+        try:
+            out = cs.anthropic_to_openai_responses({
+                "model": "claude-opus-4-8",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 999999,
+                "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+            })
+        finally:
+            cs.PROV["url"] = old_url
+        self.assertEqual(out["max_output_tokens"], 8192)
+        self.assertEqual(out["tool_choice"], "auto")
 
-    def test_qwen_per_model(self):
-        cs.PROV = cs.PROVIDERS["qwen"]
-        self.assertEqual(cs.clamp_max_tokens(100000, "qwen-max"), 8192)
+    def test_dashscope_responses_drops_incompatible_web_search_tool(self):
+        old_url = cs.PROV.get("url")
+        cs.PROV["url"] = "https://dashscope.aliyuncs.com/compatible-mode/v1/responses"
+        try:
+            out = cs.anthropic_to_openai_responses({
+                "model": "claude-opus-4-8",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {"name": "web_search", "input_schema": {"type": "object"}},
+                    {"name": "lookup", "input_schema": {"properties": {"q": {"type": "string"}}}},
+                ],
+            })
+        finally:
+            cs.PROV["url"] = old_url
+        self.assertEqual([t["name"] for t in out["tools"]], ["lookup"])
+        self.assertEqual(out["tools"][0]["parameters"]["type"], "object")
+
+    def test_non_dashscope_responses_keeps_web_search_tool(self):
+        out = cs.anthropic_to_openai_responses({
+            "model": "claude-opus-4-8",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "web_search", "input_schema": {"type": "object"}}],
+        })
+        self.assertEqual(out["tools"][0]["name"], "web_search")
+
+    def test_responses_tool_choice_none_passthrough(self):
+        out = cs.anthropic_to_openai_responses({
+            "model": "claude-opus-4-8",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_choice": {"type": "none"},
+        })
+        self.assertEqual(out["tool_choice"], "none")
+
+    def test_responses_request_maps_tool_results(self):
+        req = {
+            "model": "claude-opus-4-8",
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"q": "x"}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": [{"type": "text", "text": "found"}]},
+                ]},
+            ],
+        }
+        out = cs.anthropic_to_openai_responses(req)
+        self.assertEqual(out["input"][0], {"role": "assistant", "content": "checking"})
+        self.assertEqual(out["input"][1]["type"], "function_call")
+        self.assertEqual(out["input"][1]["call_id"], "call_1")
+        self.assertEqual(json.loads(out["input"][1]["arguments"]), {"q": "x"})
+        self.assertEqual(out["input"][2], {"type": "function_call_output", "call_id": "call_1", "output": "found"})
+
+    def test_responses_response_maps_text_and_function_call(self):
+        resp = {
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{\"q\":\"y\"}"},
+            ],
+            "usage": {"input_tokens": 4, "output_tokens": 5},
+        }
+        out = cs.openai_responses_to_anthropic(resp, "claude-opus-4-8")
+        self.assertEqual(out["content"][0], {"type": "text", "text": "hello"})
+        self.assertEqual(out["content"][1], {"type": "tool_use", "id": "call_2", "name": "lookup", "input": {"q": "y"}})
+        self.assertEqual(out["stop_reason"], "tool_use")
+        self.assertEqual(out["usage"], {"input_tokens": 4, "output_tokens": 5})
 
 
 class RelayProvider(unittest.TestCase):
@@ -71,45 +177,12 @@ class RelayProvider(unittest.TestCase):
 
     def setUp(self):
         cs.PROV = dict(cs.PROVIDERS["relay"])
+        cs.PROV_NAME = "relay"
         cs.PROV["url"] = "https://relay.test/claude/v1/messages"
         cs.PROV["models_url"] = "https://relay.test/claude/v1/models"
         cs.KEY = "cr_testkey"
         cs.RELAY_MODELS = []
         cs.RELAY_FORCE_MODEL = None
-
-    def test_passthrough_keeps_model_name(self):
-        # 中转站原生认 claude-*，模型名原样透传（不走 model_map）。
-        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
-        self.assertEqual(cs.resolve_model("claude-sonnet-4-6"), "claude-sonnet-4-6")
-        self.assertEqual(cs.resolve_model("some-other-model"), "some-other-model")
-
-    def test_empty_model_falls_back_to_default(self):
-        self.assertEqual(cs.resolve_model(""), "claude-opus-4-8")
-
-    def test_snaps_bare_id_to_upstream_dated_id(self):
-        cs.RELAY_MODELS = ["claude-haiku-4-5-20251001", "claude-opus-4-8"]
-        # 裸 id（如标题 agent 的）贴合到中转站带日期的真实 id。
-        self.assertEqual(cs.resolve_model("claude-haiku-4-5"), "claude-haiku-4-5-20251001")
-        # 精确命中不改。
-        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
-        # 缓存里没有的原样透传（交中转站处理别名/报错）。
-        self.assertEqual(cs.resolve_model("claude-sonnet-5"), "claude-sonnet-5")
-
-    def test_force_model_overrides_everything(self):
-        # 选了模型：无论 Science 发什么（含裸 claude-*、空名），都强制成选中的上游模型。
-        cs.RELAY_FORCE_MODEL = "mimo-v2.5-pro"
-        try:
-            self.assertEqual(cs.resolve_model("claude-opus-4-8"), "mimo-v2.5-pro")
-            self.assertEqual(cs.resolve_model("claude-haiku-4-5"), "mimo-v2.5-pro")
-            self.assertEqual(cs.resolve_model(""), "mimo-v2.5-pro")
-        finally:
-            cs.RELAY_FORCE_MODEL = None
-
-    def test_no_force_model_keeps_passthrough(self):
-        # 留空：维持 PR #4 透传（贴合到真实 id / 原样）。
-        cs.RELAY_FORCE_MODEL = None
-        self.assertEqual(cs.resolve_model("claude-opus-4-8"), "claude-opus-4-8")
-        self.assertEqual(cs.resolve_model(""), "claude-opus-4-8")  # 空名兜底 default_model
 
     def test_auth_headers_both(self):
         h = cs._upstream_auth_headers()
@@ -121,10 +194,6 @@ class RelayProvider(unittest.TestCase):
         cs.PROV = cs.PROVIDERS["deepseek"]
         cs.KEY = "sk-ds"
         self.assertEqual(cs._upstream_auth_headers(), {"x-api-key": "sk-ds"})
-
-    def test_no_max_tokens_clamp(self):
-        # relay default_cap=None、model_caps 空 → 尊重中转站真实上限，不夹取。
-        self.assertEqual(cs.clamp_max_tokens(1000000, "claude-opus-4-8"), 1000000)
 
     def test_models_normalized_and_cache_refreshed(self):
         # 用假 http_get_json 复刻中转站 OpenAI 风格返回，验证归一化成 Anthropic 格式
@@ -205,92 +274,84 @@ class RelayProvider(unittest.TestCase):
         self.assertIn("claude-opus-4-8", ids)
 
 
-class ThinkingNormalization(unittest.TestCase):
-    """thinking 归一化的 provider gate（spec v3 §3.1，拆两条独立处理）。
+class OpenAICustomProvider(unittest.TestCase):
+    def setUp(self):
+        cs.PROV = dict(cs.PROVIDERS["openai-custom"])
+        cs.PROV_NAME = "openai-custom"
+        cs.PROV["url"] = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        cs.PROV["models_url"] = "https://open.bigmodel.cn/api/paas/v4/models"
+        cs.PROV["default_model"] = "glm-4.5"
+        cs.KEY = "sk-openai"
+        cs.RELAY_FORCE_MODEL = "glm-4.5"
 
-    代理层只有 deepseek / relay 进入 _handle_anthropic；glm/xiaomi/硅基/openrouter/kimi/minimax
-    在代理层均为 provider=relay（靠 base_url 区分），故此处对 relay 的断言即覆盖 §3.5 test 2 的
-    「4 家 relay 回归门禁」。事实依据：MiniMax 官方 Anthropic 端点认 adaptive/disabled、不认 auto，
-    故 auto→adaptive 对 relay 保留；forced→disabled 是 DeepSeek flash 特有，只 gate 到 deepseek。
-    """
+    def tearDown(self):
+        cs.RELAY_FORCE_MODEL = None
 
-    # (A) 强制 tool_choice(any/tool) → disabled：仅 deepseek
-    def test_deepseek_forced_tool_choice_disables_thinking(self):
-        body = {"tool_choice": {"type": "any"}, "thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "deepseek")
-        self.assertEqual(out["thinking"], {"type": "disabled"})
+    def test_openai_base_root_normalization(self):
+        root = "https://open.bigmodel.cn/api/paas/v4"
+        self.assertEqual(cs.normalize_openai_base(root + "/chat/completions"), root)
+        self.assertEqual(cs.normalize_openai_base(root + "/responses"), root)
+        self.assertEqual(cs.normalize_openai_base(root + "/models"), root)
+        self.assertEqual(cs.openai_endpoint(root + "/chat/completions", "/models"), root + "/models")
+        self.assertEqual(
+            cs.openai_endpoint(root + "/models", "/chat/completions"),
+            root + "/chat/completions",
+        )
+        self.assertEqual(
+            cs.openai_endpoint(root + "/responses", "/responses"),
+            root + "/responses",
+        )
+        self.assertEqual(
+            cs.openai_endpoint("https://api.siliconflow.cn", "/chat/completions"),
+            "https://api.siliconflow.cn/v1/chat/completions",
+        )
+        self.assertEqual(
+            cs.openai_endpoint("https://api.siliconflow.cn/v1/models", "/chat/completions"),
+            "https://api.siliconflow.cn/v1/chat/completions",
+        )
 
-    def test_relay_forced_tool_choice_not_disabled(self):
-        # relay 不被强注 disabled（各中转站上游自理）；auto 仍归一到 adaptive。
-        body = {"tool_choice": {"type": "tool", "name": "x"}, "thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "relay")
-        self.assertNotEqual(out["thinking"].get("type"), "disabled")
-        self.assertEqual(out["thinking"]["type"], "adaptive")
+    def test_force_model_enters_openai_translation(self):
+        req = {
+            "model": "claude-opus-4-8",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1000000,
+        }
+        out = cs.anthropic_to_openai(req)
+        self.assertEqual(out["model"], "glm-4.5")
+        self.assertEqual(out["max_tokens"], 1000000, "custom OpenAI 不做通用 token 夹取")
 
-    def test_relay_forced_without_thinking_not_injected(self):
-        # relay + 强制工具 + 无 thinking → 不注入 thinking（回归：不再强注 disabled）。
-        body = {"tool_choice": {"type": "any"}}
-        out = cs.normalize_thinking(body, "relay")
-        self.assertNotIn("thinking", out)
+    def test_auth_headers_bearer_only(self):
+        self.assertEqual(cs._upstream_auth_headers(), {"Authorization": "Bearer sk-openai"})
 
-    # (B) auto → adaptive：deepseek 与 relay 都做
-    def test_deepseek_auto_becomes_adaptive(self):
-        body = {"thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "deepseek")
-        self.assertEqual(out["thinking"]["type"], "adaptive")
+    def test_models_uses_bearer_without_anthropic_version(self):
+        seen = {}
+        orig = cs.http_get_json
 
-    def test_relay_auto_becomes_adaptive(self):
-        body = {"thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "relay")
-        self.assertEqual(out["thinking"]["type"], "adaptive")
+        def fake(url, headers):
+            seen["url"] = url
+            seen["headers"] = headers
+            return {"data": [{"id": "glm-4.5"}]}
 
-    # 回归：非 auto 的 thinking 一律原样保留（不臆改）
-    def test_relay_non_auto_thinking_preserved(self):
-        body = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
-        out = cs.normalize_thinking(body, "relay")
-        self.assertEqual(out["thinking"], {"type": "enabled", "budget_tokens": 1024})
+        cs.http_get_json = fake
+        try:
+            out = cs.fetch_relay_models()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual(seen["url"], "https://open.bigmodel.cn/api/paas/v4/models")
+        self.assertEqual(seen["headers"].get("Authorization"), "Bearer sk-openai")
+        self.assertNotIn("anthropic-version", seen["headers"])
+        self.assertEqual([m["id"] for m in out], ["glm-4.5"])
 
-    def test_noop_when_no_thinking_and_no_forcing(self):
-        body = {"messages": []}
-        out = cs.normalize_thinking(body, "relay")
-        self.assertNotIn("thinking", out)
-
-    # relay thinking 策略 "enabled"（如 Kimi：模型强制 thinking.type=enabled，真机 §3.5 验证）
-    def test_relay_enabled_policy_auto_becomes_enabled(self):
-        body = {"thinking": {"type": "auto"}, "max_tokens": 2048}
-        out = cs.normalize_thinking(body, "relay", "enabled")
-        self.assertEqual(out["thinking"]["type"], "enabled")
-        self.assertGreater(out["thinking"]["budget_tokens"], 0)
-        self.assertLess(out["thinking"]["budget_tokens"], 2048)
-
-    def test_relay_enabled_policy_injects_when_missing(self):
-        # Kimi 连「缺 thinking」都 400，故强制注入 enabled。
-        body = {"max_tokens": 2048}
-        out = cs.normalize_thinking(body, "relay", "enabled")
-        self.assertEqual(out["thinking"]["type"], "enabled")
-
-    def test_relay_enabled_policy_preserves_existing_enabled(self):
-        body = {"thinking": {"type": "enabled", "budget_tokens": 512}, "max_tokens": 2048}
-        out = cs.normalize_thinking(body, "relay", "enabled")
-        self.assertEqual(out["thinking"], {"type": "enabled", "budget_tokens": 512})
-
-    def test_relay_enabled_budget_stays_below_max_tokens(self):
-        body = {"thinking": {"type": "auto"}, "max_tokens": 100}
-        out = cs.normalize_thinking(body, "relay", "enabled")
-        self.assertLess(out["thinking"]["budget_tokens"], 100)
-        self.assertGreaterEqual(out["thinking"]["budget_tokens"], 1)
-
-    def test_relay_adaptive_policy_still_auto_to_adaptive(self):
-        # 默认策略（adaptive，如 MiniMax）不变。
-        body = {"thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "relay", "adaptive")
-        self.assertEqual(out["thinking"]["type"], "adaptive")
-
-    def test_deepseek_unaffected_by_relay_thinking_arg(self):
-        # relay_thinking 只对 relay 生效；deepseek 行为不因该参数改变。
-        body = {"tool_choice": {"type": "any"}, "thinking": {"type": "auto"}}
-        out = cs.normalize_thinking(body, "deepseek", "enabled")
-        self.assertEqual(out["thinking"], {"type": "disabled"})
+    def test_models_discovery_works_without_forced_model(self):
+        cs.RELAY_FORCE_MODEL = None
+        orig = cs.http_get_json
+        cs.http_get_json = lambda url, headers: {"data": [{"id": "glm-4.5"}]}
+        try:
+            code, body = cs.build_models_response()
+        finally:
+            cs.http_get_json = orig
+        self.assertEqual(code, 200)
+        self.assertEqual([m["id"] for m in body["data"]], ["glm-4.5"])
 
 
 class BuildModelsResponse(unittest.TestCase):

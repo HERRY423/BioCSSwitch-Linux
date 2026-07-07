@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-echo "== python unittest =="
-python3 -m unittest discover -s test -p 'test_*.py' -v
-echo "== bio 离线测试（fixture 回放 / tool_executor / linter 隐私 / generator golden，零网络）=="
-python3 test/test_bio_offline.py
-echo "== node --test =="
-node --test test/test_make_virtual_oauth.mjs
-echo "== bash scripts =="
-bash test/test_scripts.sh
-echo "== bash ops scripts (doctor/verify-proxy/self-test) =="
-bash test/test_ops_scripts.sh
-echo "ALL GREEN"
+# S0 layered acceptance aggregator.
+# Usage: run_all.sh [--require-release-ready]
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
+REQUIRE_RELEASE=0; [ "${1:-}" = "--require-release-ready" ] && REQUIRE_RELEASE=1
+LAYERS="offline bio loopback scripts rust frontend"
+any_fail=0; not_release=0
+echo "== S0 layered acceptance gate =="
+for L in $LAYERS; do
+  line="$(bash "test/run-$L.sh" 2>&1 | tee /dev/stderr | grep -E '^S0_LAYER ' | tail -1)"
+  st="$(echo "$line" | awk '{print $3}')"; [ -z "$st" ] && st="fail"
+  eval "STATUS_$L=\"\$st\""
+  case "$st" in
+    fail) any_fail=1; not_release=1 ;;
+    pass) : ;;
+    *) not_release=1 ;;
+  esac
+done
+echo "---- summary ----"
+for L in $LAYERS; do
+  eval "st=\"\$STATUS_$L\""
+  printf '  %-9s %s\n' "$L" "$st"
+done
+echo "----"
+if [ "$any_fail" -eq 0 ]; then echo "current-env clean: YES"; else echo "current-env clean: NO"; fi
+if [ "$not_release" -eq 0 ]; then echo "release-ready green: YES"; else echo "release-ready green: NO"; fi
+if [ "$any_fail" -ne 0 ]; then exit 1; fi
+if [ "$REQUIRE_RELEASE" -eq 1 ] && [ "$not_release" -ne 0 ]; then exit 2; fi
+exit 0

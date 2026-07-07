@@ -12,6 +12,7 @@ import urllib.request
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, HERE)
 from mock_upstream import start_mock
+from _capability import loopback_available
 
 PROXY = os.path.join(HERE, "..", "proxy", "csswitch_proxy.py")
 SEC = "s3cr3t-test-token"
@@ -28,11 +29,12 @@ def _req(url, method="GET", body=None):
         return e.code, e.read()
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class ProxyAuth(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.up_url, cls.hits, cls.stop_up = start_mock("json")
-        port = 18990
+        port = 18970  # S0 全局唯一端口：ProxyAuth
         cls.base = f"http://127.0.0.1:{port}"
         cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-auth-{port}.log")
         open(cls.logf, "w").close()
@@ -99,7 +101,7 @@ class ProxyAuth(unittest.TestCase):
         # 用同一条 http.client.HTTPConnection 连发两个请求来复现/验证修复。
         body = json.dumps({"model": "claude-opus-4-8", "max_tokens": 10,
                            "messages": [{"role": "user", "content": "hi"}]}).encode()
-        conn = http.client.HTTPConnection("127.0.0.1", 18990, timeout=5)
+        conn = http.client.HTTPConnection("127.0.0.1", 18970, timeout=5)  # S0 全局唯一端口：同 ProxyAuth
         received = b""
         try:
             # 第一次请求：不带 secret 前缀，触发 403，其请求体故意不被服务端读走。
@@ -142,7 +144,7 @@ class ProxyAuth(unittest.TestCase):
             "Connection: close\r\n"
             "\r\n"
         ).encode()
-        s = socket.create_connection(("127.0.0.1", 18990), timeout=5)
+        s = socket.create_connection(("127.0.0.1", 18970), timeout=5)  # S0 全局唯一端口：同 ProxyAuth
         try:
             s.sendall(payload)
             resp = b""
@@ -169,11 +171,12 @@ class ProxyAuth(unittest.TestCase):
         self.assertEqual(len(self.hits), before, "畸形请求不应打到上游")
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class ProxyUpstreamErrorPassthrough(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.up_url, cls.hits, cls.stop_up = start_mock("status:401")
-        port = 18992
+        port = 18971  # S0 全局唯一端口：ProxyUpstreamErrorPassthrough
         cls.base = f"http://127.0.0.1:{port}"
         cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-401-{port}.log")
         open(cls.logf, "w").close()
@@ -206,11 +209,12 @@ class ProxyUpstreamErrorPassthrough(unittest.TestCase):
         self.assertEqual(s, 401, f"应保留上游 401，实收 {s} {b[:160]!r}")
 
 
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
 class ProxyQwenUpstreamErrorPassthrough(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.up_url, cls.hits, cls.stop_up = start_mock("status:401")
-        port = 18993
+        port = 18972  # S0 全局唯一端口：ProxyQwenUpstreamErrorPassthrough
         cls.base = f"http://127.0.0.1:{port}"
         cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-qwen401-{port}.log")
         open(cls.logf, "w").close()
@@ -241,6 +245,89 @@ class ProxyQwenUpstreamErrorPassthrough(unittest.TestCase):
                     {"model": "claude-opus-4-8", "max_tokens": 1,
                      "messages": [{"role": "user", "content": "ping"}]})
         self.assertEqual(s, 401, f"qwen 也应保留上游 401，实收 {s} {b[:160]!r}")
+
+
+class ProxyOpenAICustomModelsDiscovery(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.up_url, cls.hits, cls.stop_up = start_mock("openai_models")
+        port = 18995
+        cls.base = f"http://127.0.0.1:{port}"
+        cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-openai-models-{port}.log")
+        open(cls.logf, "w").close()
+        env = dict(os.environ, CSSWITCH_OPENAI_KEY="fake-openai-key",
+                   CSSWITCH_OPENAI_BASE_URL=cls.up_url)
+        env.pop("CSSWITCH_OPENAI_MODEL", None)
+        cls.proc = subprocess.Popen(
+            [sys.executable, PROXY, "--provider", "openai-custom",
+             "--port", str(port), "--auth-token", SEC, "--log", cls.logf],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            try:
+                s, _b = _req(f"{cls.base}/{SEC}/health")
+                if s == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(timeout=5)
+        cls.stop_up()
+
+    def test_models_fetch_starts_without_model_env(self):
+        # 回归 v0.3.3 F1：获取模型 scratch 不带 CSSWITCH_OPENAI_MODEL。
+        # 代理应能启动并只为 /models 回源；正式推理由 Rust 侧仍要求 model 必填。
+        s, b = _req(f"{self.base}/{SEC}/v1/models")
+        self.assertEqual(s, 200, b[:160])
+        body = json.loads(b)
+        self.assertEqual([m["id"] for m in body["data"]], ["glm-4.5"])
+        self.assertEqual(self.hits, ["/up/v1/models"])
+
+
+@unittest.skipUnless(loopback_available(), "env-blocked: loopback bind/connect not permitted")
+class ProxyOpenAIResponses(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.up_url, cls.hits, cls.stop_up = start_mock("openai_responses")
+        port = 18996
+        cls.base = f"http://127.0.0.1:{port}"
+        cls.logf = os.path.join(tempfile.gettempdir(), f"csswitch-openai-responses-{port}.log")
+        open(cls.logf, "w").close()
+        env = dict(os.environ, CSSWITCH_OPENAI_KEY="fake-openai-key",
+                   CSSWITCH_OPENAI_BASE_URL=cls.up_url,
+                   CSSWITCH_OPENAI_MODEL="gpt-5.2")
+        cls.proc = subprocess.Popen(
+            [sys.executable, PROXY, "--provider", "openai-responses",
+             "--port", str(port), "--auth-token", SEC, "--log", cls.logf],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            try:
+                s, _b = _req(f"{cls.base}/{SEC}/health")
+                if s == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(timeout=5)
+        cls.stop_up()
+
+    def test_messages_use_responses_endpoint_and_convert_back(self):
+        s, b = _req(f"{self.base}/{SEC}/v1/messages", "POST",
+                    {"model": "claude-opus-4-8", "max_tokens": 10,
+                     "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(s, 200, b[:160])
+        body = json.loads(b)
+        self.assertEqual(body["content"], [{"type": "text", "text": "ok-responses"}])
+        self.assertEqual(body["usage"], {"input_tokens": 2, "output_tokens": 3})
+        self.assertIn("/up/v1/responses", self.hits)
+        self.assertNotIn("/up/v1/chat/completions", self.hits)
 
 
 if __name__ == "__main__":

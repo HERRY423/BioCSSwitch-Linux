@@ -26,7 +26,9 @@ const MOCK_TEMPLATES = [
   { id: "minimax", name: "MiniMax", category: "cn_official", api_format: "anthropic", adapter: "relay", base_url: "https://api.minimaxi.com/anthropic", base_url_editable: true, requires_model_override: true, builtin_models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], icon: "minimax", icon_color: "#E1341E", website_url: "https://platform.minimaxi.com" },
   { id: "openrouter", name: "OpenRouter", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "https://openrouter.ai/api", base_url_editable: true, requires_model_override: true, builtin_models: ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.8-fast"], icon: "openrouter", icon_color: "#6467F2", website_url: "https://openrouter.ai" },
   { id: "qwen", name: "通义千问", category: "cn_official", api_format: "openai_chat", adapter: "qwen", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", base_url_editable: false, requires_model_override: false, builtin_models: ["qwen-max", "qwen-plus", "qwen-turbo"], icon: "qwen", icon_color: "#615CED", website_url: "https://dashscope.aliyun.com" },
-  { id: "custom", name: "自定义", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "", base_url_editable: true, requires_model_override: true, builtin_models: [], icon: "custom", icon_color: "#6B7280", website_url: "" },
+  { id: "custom-openai", name: "自定义 OpenAI", category: "custom", api_format: "openai_chat", adapter: "openai-custom", base_url: "", base_url_editable: true, requires_model_override: true, builtin_models: [], icon: "custom", icon_color: "#2563EB", website_url: "" },
+  { id: "custom-openai-responses", name: "自定义 OpenAI Responses", category: "custom", api_format: "openai_responses", adapter: "openai-responses", base_url: "", base_url_editable: true, requires_model_override: true, builtin_models: [], icon: "custom", icon_color: "#0F766E", website_url: "" },
+  { id: "custom", name: "自定义 Anthropic", category: "custom", api_format: "anthropic", adapter: "relay", base_url: "", base_url_editable: true, requires_model_override: true, builtin_models: [], icon: "custom", icon_color: "#6B7280", website_url: "" },
 ];
 const mockStore = {
   schema_version: 2,
@@ -202,7 +204,13 @@ function modelCapability(t) {
 function sourceHint(t) {
   if (!t) return "选择来源后按提示填写。";
   // 真·自定义（可编辑且无预设地址）才叫「自定义端点」；预设虽可编辑但有官方默认，另行描述。
-  if (t.base_url_editable && !t.base_url) return "自定义端点：填地址与 key，用「获取模型」列出并选一个。";
+  if (t.base_url_editable && !t.base_url && t.api_format === "openai_chat") {
+    return "自定义 OpenAI Chat Completions 兼容端点：填 base root、key 与模型，经代理转换协议。";
+  }
+  if (t.base_url_editable && !t.base_url && t.api_format === "openai_responses") {
+    return "自定义 OpenAI Responses 兼容端点：填 base root、key 与模型，经代理转换协议。";
+  }
+  if (t.base_url_editable && !t.base_url) return "自定义 Anthropic 兼容端点：填地址与 key，用「获取模型」列出并选一个。";
   const cap = modelCapability(t);
   if (cap === CAP.NATIVE) {
     // deepseek 是原生 Anthropic 透传；qwen 经代理做 Anthropic↔OpenAI 转换，别都叫「直连」。
@@ -559,10 +567,16 @@ function onWizTemplate() {
     // 预设：预填官方默认地址（仍可改到套餐 / 区域端点）；真·自定义：留空 + 占位提示。
     els.wizBase.value = t.base_url || "";
     els.wizBase.readOnly = false;
-    els.wizBase.placeholder = "https://your-relay/claude";
+    els.wizBase.placeholder = t.api_format === "openai_chat" || t.api_format === "openai_responses"
+      ? "https://open.bigmodel.cn/api/paas/v4"
+      : "https://your-relay/claude";
     els.wizBaseHint.textContent = t.base_url
       ? "官方默认地址，可改到 token 套餐 / 区域端点（如小米 token plan）。"
-      : "自定义端点根地址（自动补 /v1/messages 与 /v1/models）。";
+      : (t.api_format === "openai_chat"
+        ? "OpenAI 兼容 base root，代理自动补 /chat/completions 与 /models。"
+        : t.api_format === "openai_responses"
+        ? "OpenAI 兼容 base root，代理自动补 /responses 与 /models。"
+        : "自定义端点根地址（自动补 /v1/messages 与 /v1/models）。");
   } else {
     els.wizBase.value = t.base_url;
     els.wizBase.readOnly = true;
@@ -580,11 +594,20 @@ function refreshWizGate() {
   els.wizSaveBtn.disabled = busy || !!(need && !els.wizModel.value.trim());
 }
 
+function openaiCustomAnthropicBaseMessage(t, base) {
+  if (t && (t.id === "custom-openai" || t.id === "custom-openai-responses") && (base || "").trim().toLowerCase().includes("/anthropic")) {
+    return "这个地址看起来是 Anthropic 兼容端点。请改选「自定义 Anthropic」，或填写 OpenAI 兼容 base root（如 https://api.moonshot.cn/v1）。";
+  }
+  return "";
+}
+
 async function wizFetch() {
   const t = tplById(els.wizTemplate.value);
   if (!t) return;
   const base = t.base_url_editable ? els.wizBase.value.trim() : t.base_url;
   if (!base) { setMsg("请先填写 base_url。", "err"); return; }
+  const baseErr = openaiCustomAnthropicBaseMessage(t, base);
+  if (baseErr) { setMsg(baseErr, "err"); return; }
   const key = els.wizKey.value.trim();
   if (!key) { setMsg("请先填 key 再获取模型。", "err"); return; }
   setBusy(true);
@@ -613,6 +636,8 @@ async function wizSave() {
   if (t.base_url_editable) {
     const base = els.wizBase.value.trim();
     if (!base) { setMsg("请先填写 base_url。", "err"); return; }
+    const baseErr = openaiCustomAnthropicBaseMessage(t, base);
+    if (baseErr) { setMsg(baseErr, "err"); return; }
     args.baseUrl = base;
   }
   setBusy(true);
@@ -645,11 +670,18 @@ function openConn(id) {
   els.connTitle.textContent = "编辑连接 · " + p.name + (active ? "（当前生效）" : "");
   els.connBase.value = p.base_url || (t ? t.base_url : "");
   els.connBase.readOnly = !editable;
+  els.connBase.placeholder = t && (t.api_format === "openai_chat" || t.api_format === "openai_responses")
+    ? "https://open.bigmodel.cn/api/paas/v4"
+    : "https://your-relay/claude";
   // native（deepseek/qwen）隐藏「获取模型」按钮，别再提示一个不存在的操作（修 #5）。
   els.connBaseHint.textContent = editable
     ? (t && t.base_url
         ? "官方默认地址，可改到 token 套餐 / 区域端点。"
-        : "自定义端点根地址。")
+        : (t && t.api_format === "openai_chat"
+          ? "OpenAI 兼容 base root，代理自动补 /chat/completions。"
+          : t && t.api_format === "openai_responses"
+          ? "OpenAI 兼容 base root，代理自动补 /responses。"
+          : "自定义端点根地址。"))
     : (modelCapability(t) === CAP.NATIVE
         ? "模板地址（只读），模型由内置映射自动选择。"
         : "模板地址（只读）。填 key 后可「获取模型」。");
@@ -679,6 +711,8 @@ async function connFetch() {
   const editable = t ? t.base_url_editable : true;
   const base = editable ? els.connBase.value.trim() : (t ? t.base_url : els.connBase.value.trim());
   if (!base) { setMsg("请先填写 base_url。", "err"); return; }
+  const baseErr = openaiCustomAnthropicBaseMessage(t, base);
+  if (baseErr) { setMsg(baseErr, "err"); return; }
   setBusy(true);
   setMsg("获取模型中：起临时代理探 /v1/models…");
   try {
@@ -707,6 +741,8 @@ async function connSave() {
   // 可编辑地址的模板都是中转/自定义端点，必须带 base_url；清空后保存会得到不可用连接（激活必失败）。
   // 保存前就拦（后端也有同款守卫兜底，修 P2）。
   if (editable && !base) { setMsg("中转 / 自定义端点必须填写连接地址（base_url）。", "err"); return; }
+  const baseErr = openaiCustomAnthropicBaseMessage(t, base);
+  if (baseErr) { setMsg(baseErr, "err"); return; }
   const active = p.id === state.active_id;
   // key 留空＝不改（后端语义）；base_url/model 照传。api_format 不在此改（保留模板值）。
   const args = { id: p.id, baseUrl: base, model, key: els.connKey.value.trim() };

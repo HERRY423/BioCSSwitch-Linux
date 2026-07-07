@@ -32,3 +32,15 @@ docs/superpowers/
 # 每日巡检运行产物：全是本机运行态（报告/版本基线/日志/锁），只保留空目录占位
 findings/auto-maint/*
 !findings/auto-maint/.gitkeep
+
+# Local version comparison binaries; never commit.
+.science-binaries/
+
+# Local scratch files and runtime intermediates.
+scratchpad/
+
+# Local Claude Code session config.
+.claude/
+
+# Local seed files.
+.seed
