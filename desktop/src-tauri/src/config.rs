@@ -18,6 +18,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -303,6 +304,14 @@ fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.json")
 }
 
+const CONFIG_LOCK_NAME: &str = "config.json.lock";
+const CONFIG_LOCK_WAIT: Duration = Duration::from_secs(10);
+const CONFIG_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
+
+fn config_lock_path(dir: &Path) -> PathBuf {
+    dir.join(CONFIG_LOCK_NAME)
+}
+
 /// 若 path 存在且是符号链接则报错（不跟随）。path 不存在返回 Ok。
 pub(crate) fn assert_not_symlink(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
@@ -335,6 +344,84 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
 
 // ---------- 备份 ----------
 /// 原子拷贝 src → dst（拒符号链接、0600、O_EXCL 临时文件 + rename）。src 不存在 → Err。
+struct ConfigFileLock {
+    path: PathBuf,
+    token: String,
+}
+
+impl Drop for ConfigFileLock {
+    fn drop(&mut self) {
+        let should_remove = fs::read_to_string(&self.path)
+            .map(|s| s.contains(&self.token))
+            .unwrap_or(false);
+        if should_remove {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|md| md.modified())
+        .and_then(|modified| {
+            modified
+                .elapsed()
+                .map_err(io::Error::other)
+        })
+        .map(|age| age >= CONFIG_LOCK_STALE_AFTER)
+        .unwrap_or(false)
+}
+
+fn acquire_config_lock(dir: &Path) -> io::Result<ConfigFileLock> {
+    let path = config_lock_path(dir);
+    let token = format!(
+        "{}:{:?}:{}",
+        std::process::id(),
+        std::thread::current().id(),
+        now_ms()
+    );
+    let start = Instant::now();
+    loop {
+        assert_not_symlink(&path)?;
+        let open_res = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path);
+        match open_res {
+            Ok(mut f) => {
+                writeln!(f, "{token}")?;
+                f.sync_all()?;
+                return Ok(ConfigFileLock { path, token });
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                if lock_is_stale(&path) {
+                    assert_not_symlink(&path)?;
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+                if start.elapsed() >= CONFIG_LOCK_WAIT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("timed out waiting for config write lock: {}", path.display()),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn with_config_lock<T, F>(dir: &Path, f: F) -> io::Result<T>
+where
+    F: FnOnce() -> io::Result<T>,
+{
+    ensure_dir(dir)?;
+    let _lock = acquire_config_lock(dir)?;
+    f()
+}
+
 fn atomic_copy(src: &Path, dst: &Path) -> io::Result<()> {
     assert_not_symlink(dst)?;
     let data = fs::read(src)?; // src 不存在 → Err（迁移备份据此中止）
@@ -416,16 +503,31 @@ pub fn write_bytes_atomic_0600(path: &Path, data: &[u8]) -> io::Result<()> {
 
 /// 迁移前备份旧 config.json → config.json.v1.bak。源不存在 / 备份失败 → Err（中止迁移）。
 pub fn write_migration_backup(dir: &Path) -> io::Result<()> {
+    with_config_lock(dir, || write_migration_backup_unlocked(dir))
+}
+
+fn write_migration_backup_unlocked(dir: &Path) -> io::Result<()> {
     atomic_copy(&config_path(dir), &dir.join("config.json.v1.bak"))
 }
 
 /// 普通保存前的单份滚动备份 → config.json.bak。best-effort（调用方可忽略 Err），但写法仍原子/0600。
 pub fn write_rolling_backup(dir: &Path) -> io::Result<()> {
+    with_config_lock(dir, || write_rolling_backup_unlocked(dir))
+}
+
+fn write_rolling_backup_unlocked(dir: &Path) -> io::Result<()> {
     atomic_copy(&config_path(dir), &dir.join("config.json.bak"))
 }
 
 /// 清 key / 删 profile 后净化滚动备份：直接删，避免旧明文 key 残留可恢复。
 pub fn drop_rolling_backup(dir: &Path) {
+    let _ = with_config_lock(dir, || {
+        drop_rolling_backup_unlocked(dir);
+        Ok(())
+    });
+}
+
+fn drop_rolling_backup_unlocked(dir: &Path) {
     let _ = fs::remove_file(dir.join("config.json.bak"));
 }
 
@@ -433,6 +535,10 @@ pub fn drop_rolling_backup(dir: &Path) {
 /// 旧文件（schema<2）→ 备份 v1.bak + 迁移 + 落盘 v2；schema>2 → Err（拒绝启动）。
 /// v2 悬空 active_id 归一化为空。文件/目录是符号链接则报错（不跟随读）。
 pub fn load_from(dir: &Path) -> io::Result<Config> {
+    with_config_lock(dir, || load_from_unlocked(dir))
+}
+
+fn load_from_unlocked(dir: &Path) -> io::Result<Config> {
     // 目录本身也不许是符号链接：否则攻击者把 ~/.csswitch 换成软链就能让读取跟随到别处。
     assert_not_symlink(dir)?;
     let path = config_path(dir);
@@ -450,7 +556,7 @@ pub fn load_from(dir: &Path) -> io::Result<Config> {
             format!("config.json 由更新版本（schema {v}）写入，请升级 CSSwitch 后再打开。"),
         )),
         VersionKind::Legacy => {
-            write_migration_backup(dir)?; // 备份失败即中止迁移，不动原文件
+            write_migration_backup_unlocked(dir)?; // 备份失败即中止迁移，不动原文件
             let legacy: crate::config_legacy::ConfigV1 =
                 serde_json::from_slice(&data).map_err(|e| {
                     io::Error::new(
@@ -466,7 +572,7 @@ pub fn load_from(dir: &Path) -> io::Result<Config> {
                     filled.len()
                 ));
             }
-            save_to(dir, &cfg)?; // 落盘为 v2（幂等，下次读走 V2 分支）
+            save_to_unlocked(dir, &cfg)?; // 落盘为 v2（幂等，下次读走 V2 分支）
             Ok(cfg)
         }
         VersionKind::V2 => {
@@ -484,7 +590,7 @@ pub fn load_from(dir: &Path) -> io::Result<Config> {
                     "已为 {} 个旧配置补上默认模型（可在连接编辑修改）。",
                     filled.len()
                 ));
-                save_to(dir, &cfg)?;
+                save_to_unlocked(dir, &cfg)?;
             }
             Ok(cfg)
         }
@@ -530,6 +636,10 @@ fn backfill_relay_models(cfg: &mut Config) -> Vec<String> {
 
 /// 原子写 `dir/config.json`（0600）。目录/目标文件是符号链接则拒绝。
 pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
+    with_config_lock(dir, || save_to_unlocked(dir, cfg))
+}
+
+fn save_to_unlocked(dir: &Path, cfg: &Config) -> io::Result<()> {
     ensure_dir(dir)?;
     let path = config_path(dir);
     assert_not_symlink(&path)?;
@@ -576,10 +686,12 @@ pub fn save_to(dir: &Path, cfg: &Config) -> io::Result<()> {
 pub fn update<F: FnOnce(&mut Config)>(dir: &Path, f: F) -> io::Result<Config> {
     static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut cfg = load_from(dir)?;
-    f(&mut cfg);
-    save_to(dir, &cfg)?;
-    Ok(cfg)
+    with_config_lock(dir, || {
+        let mut cfg = load_from_unlocked(dir)?;
+        f(&mut cfg);
+        save_to_unlocked(dir, &cfg)?;
+        Ok(cfg)
+    })
 }
 
 /// 掩码：固定 4 个圆点 + 末 4 位（`••••tail`）。空 key 返回空串；≤4 位全遮。
@@ -1073,6 +1185,26 @@ mod tests {
             })
             .collect();
         assert!(leftovers.is_empty(), "临时文件应已 rename 掉");
+    }
+
+    #[test]
+    fn no_lock_file_left_after_update() {
+        let d = tmpdir().join(".csswitch");
+        save_to(&d, &Config::default()).unwrap();
+        update(&d, |c| c.proxy_port = 20001).unwrap();
+        assert!(!config_lock_path(&d).exists(), "config lock should be released");
+    }
+
+    #[test]
+    fn update_rejects_symlinked_lock_file() {
+        let base = tmpdir();
+        let d = base.join(".csswitch");
+        fs::create_dir_all(&d).unwrap();
+        let target = base.join("elsewhere.lock");
+        fs::write(&target, b"lock").unwrap();
+        symlink(&target, config_lock_path(&d)).unwrap();
+        let err = update(&d, |c| c.proxy_port = 20002).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]

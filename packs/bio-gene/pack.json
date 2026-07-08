@@ -3,6 +3,10 @@
   "name": "基因 / 变异 / 蛋白数据库",
   "description": "NCBI Gene / ClinVar / dbSNP / GEO / SRA（E-utilities）+ UniProt（蛋白）+ Ensembl（跨物种基因组）。全部匿名免费，NCBI 可选 API key。",
   "version": "0.1.0",
+  "dependencies": [],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP servers"}
+  ],
   "requires_env": [],
   "optional_env": [
     {"name": "NCBI_API_KEY", "label": "NCBI API Key（可选）"},

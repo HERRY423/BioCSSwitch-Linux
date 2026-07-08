@@ -4,6 +4,28 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.3.7] - 2026-07-08
+
+> Biomedical infrastructure hardening: structured GRADE dossiers, real single-cell workflow recipes, and schema-backed pack dependencies.
+
+### Added
+- **GRADE evidence dossiers**: added `grade_evidence_dossier` for body-of-evidence modeling across studies, including weighted design signals, sample size, risk of bias, inconsistency, indirectness, imprecision, publication bias, upgrade domains, and outcome-level synthesis.
+- **Probabilistic EtD**: added `etd_probabilistic_recommendation`, replacing deterministic recommendation-only branching with support intervals across benefits, harms, certainty, values, resources, equity, acceptability, and feasibility.
+- **Single-cell workflow recipes**: added `sc_workflow_recipe` with Snakemake and Nextflow-oriented outputs wired to scanpy, Scrublet, scvi-tools, Harmony, CellTypist, SingleR, Seurat/Bioconductor, and nf-core/scrnaseq handoff patterns.
+- **Pack manifest schema**: added `packs/pack.schema.json` and extended pack manifests with `version`, `dependencies`, and `requires_tools`.
+
+### Changed
+- Desktop pack loading now validates manifest IDs, semantic versions, dependencies, required tools, and legacy `optional_env` forms before surfacing packs to the UI.
+- Pack UI/fallback metadata now exposes dependency information so chained packs such as `bio-scfm` can declare upstream expectations from `bio-singlecell`.
+- BioCSSwitch release metadata now targets version `0.3.7` and tag `bio-v0.3.7`.
+
+### Verification
+- `python -m py_compile packs/bio-audit/grade_server.py packs/bio-singlecell/singlecell_server.py test/test_bio_offline.py`
+- `python test/test_bio_offline.py`
+- `node --check desktop/src/main.js`
+- `git diff --check`
+- Rust/Tauri checks were not run locally because `cargo` is not installed on this Windows machine.
+
 ## [0.3.3] — 2026-07-06
 
 > BioCSSwitch 首个生物医学发行版。基于上游 CSSwitch v0.3.2（Science 顶部真实模型名 + Kimi/MiniMax + relay 空值守卫），面向 biomedical research 发布本地 MCP/Skill packs、证据审计、隐私/安全红队、单细胞与 scFM 工作流。

@@ -112,17 +112,27 @@ function mockInvoke(cmd, args) {
       return Promise.resolve({ proxy: "amber", sandbox: "amber", upstream: "amber" });
     case "app_version":
       return Promise.resolve("0.0.0-preview");
+    case "check_updates":
+      return Promise.resolve({
+        ok: true,
+        current_version: "0.0.0-preview",
+        latest_version: "0.0.0-preview",
+        latest_tag: "v0.0.0-preview",
+        release_url: "https://github.com/HERRY423/BioCSSwitch/releases/latest",
+        update_available: false,
+      });
     case "run_doctor":
       return Promise.resolve("（预览模式：后端未运行，这里是占位文本）");
     case "list_packs":
       return Promise.resolve({
         packs: [
-          { id: "bio-lit", name: "生物医学文献检索", description: "PubMed / Europe PMC / Crossref / bioRxiv / medRxiv", optional_env: [{ name: "NCBI_API_KEY", label: "NCBI API Key（可选）" }], requires_env: [] },
-          { id: "bio-audit", name: "证据链与引用审计", description: "PMID/DOI/NCT 校验 + 证据类型 + Skill 强制规范", optional_env: [], requires_env: [], depends_on: ["bio-lit"] },
-          { id: "bio-mcp-shim", name: "远程 MCP 本地替身", description: "让 Science 仍看到 pubmed / clinical-trials / chembl / biorxiv 同名 MCP，实际走本地", optional_env: [], requires_env: [] },
-          { id: "bio-norm", name: "实体标准化 / 消歧", description: "HGNC / MeSH / MONDO / HPO / GO / ChEBI + disambiguate", optional_env: [], requires_env: [] },
-          { id: "bio-privacy", name: "隐私 / 合规模式", description: "PHI 扫描 + 脱敏 + 审计日志 + Skill 强制", optional_env: [], requires_env: [] },
-          { id: "bio-workflows", name: "科研工作流模板 Skills", description: "综述 / 靶点 / GEO / 试验 / rebuttal / grant aims", optional_env: [], requires_env: [] },
+          { id: "bio-lit", name: "生物医学文献检索", description: "PubMed / Europe PMC / Crossref / bioRxiv / medRxiv", optional_env: [{ name: "NCBI_API_KEY", label: "NCBI API Key（可选）" }], requires_env: [], dependencies: [], requires_tools: [] },
+          { id: "bio-audit", name: "证据链与引用审计", description: "PMID/DOI/NCT 校验 + 证据类型 + Skill 强制规范", optional_env: [], requires_env: [], dependencies: ["bio-lit"], depends_on: ["bio-lit"], requires_tools: [] },
+          { id: "bio-mcp-shim", name: "远程 MCP 本地替身", description: "让 Science 仍看到 pubmed / clinical-trials / chembl / biorxiv 同名 MCP，实际走本地", optional_env: [], requires_env: [], dependencies: ["bio-lit", "bio-trials", "bio-drug"], requires_tools: [] },
+          { id: "bio-norm", name: "实体标准化 / 消歧", description: "HGNC / MeSH / MONDO / HPO / GO / ChEBI + disambiguate", optional_env: [], requires_env: [], dependencies: [], requires_tools: [] },
+          { id: "bio-privacy", name: "隐私 / 合规模式", description: "PHI 扫描 + 脱敏 + 审计日志 + Skill 强制", optional_env: [], requires_env: [], dependencies: [], requires_tools: [] },
+          { id: "bio-workflows", name: "科研工作流模板 Skills", description: "综述 / 靶点 / GEO / 试验 / rebuttal / grant aims", optional_env: [], requires_env: [], dependencies: ["bio-lit", "bio-audit"], requires_tools: [] },
+          { id: "bio-ml", name: "机器学习突破板块", description: "多模态 FM / 虚拟细胞 / AI 药物发现 / 联邦学习 / 临床验证门", optional_env: [], requires_env: [], dependencies: ["bio-audit", "bio-privacy"], depends_on: ["bio-audit", "bio-privacy"], requires_tools: [] },
         ],
         enabled: {}, env_set: {}, mode: "proxy",
         sensitive_mode: false, local_endpoint_hosts: [], current_upstream_host: "api.deepseek.com",
@@ -182,12 +192,15 @@ function mockInvoke(cmd, args) {
 const $ = (id) => document.getElementById(id);
 const els = {};
 let statusTimer = null;
+let updateTimer = null;
 let busy = false;
 let mode = "proxy"; // "proxy" 第三方 | "official" 官方
 // 当前配置快照（get_config 结果）。全 key 绝不在此，只有掩码。
 let state = { profiles: [], templates: [], active_id: "", proxy_port: 18991, sandbox_port: 8990, agent_mode: "normal" };
 let pendingSkipActivateId = null;   // set_active 校验含糊时，允许「跳过验证」再切
 let pendingConfirm = null;          // 危险操作（清 key / 删除）的「再点一次确认」态
+let lastUpdateCheck = null;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const CAT_LABELS = { official: "官方", cn_official: "国内", custom: "自定义" };
 
@@ -241,7 +254,7 @@ function applyModelCapability(t, ui, currentModel) {
     ui.info.hidden = false;
     ui.sel.hidden = true;
     ui.sel.value = currentModel || "";
-    if (dl) dl.innerHTML = "";
+    clearChildren(dl);
     if (ui.fetchBtn) ui.fetchBtn.hidden = true;
     ui.hint.textContent = "";
     return cap;
@@ -297,10 +310,40 @@ async function call(cmd, args) {
   return await invoke(cmd, args);
 }
 
-function escapeHtml(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
+function clearChildren(el) {
+  if (el) el.replaceChildren();
+}
+
+function textEl(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  el.textContent = String(text ?? "");
+  return el;
+}
+
+function appendText(el, text) {
+  el.appendChild(document.createTextNode(String(text ?? "")));
+  return el;
+}
+
+function setSafeBackground(el, color) {
+  const c = String(color || "").trim();
+  if (/^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(c)) {
+    el.style.background = c;
+  }
+}
+
+function applySafeExternalLink(a, url) {
+  try {
+    const u = new URL(String(url || ""));
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    a.href = u.href;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function tplById(id) {
@@ -363,7 +406,7 @@ async function loadConfig() {
 // 列表里模型摘要：无显式 model 时按三能力给准确措辞（native 内置映射 / relay 跟随 / 需指定），
 // 取代旧「（透传）」字样（三能力语义下不再有「透传」）。
 function modelSummary(p) {
-  if (p.model) return escapeHtml(p.model);
+  if (p.model) return String(p.model);
   const cap = modelCapability(tplById(p.template_id));
   if (cap === CAP.NATIVE) return "内置映射";
   if (cap === CAP.FOLLOW) return "跟随 Science";
@@ -373,36 +416,51 @@ function modelSummary(p) {
 function renderList() {
   const list = els.profileList;
   const ps = state.profiles || [];
+  clearChildren(list);
   if (!ps.length) {
-    list.innerHTML = '<div class="empty">还没有配置。点右上「＋ 新建」加一条第三方来源。</div>';
+    list.appendChild(textEl("div", "empty", "还没有配置。点右上「＋ 新建」加一条第三方来源。"));
     return;
   }
-  list.innerHTML = ps.map((p) => {
+  for (const p of ps) {
     const active = p.id === state.active_id;
     const catLabel = CAT_LABELS[p.category] || p.category || "";
-    const keyMask = p.key ? escapeHtml(p.key) : "未填 key";
+    const keyMask = p.key ? String(p.key) : "未填 key";
     const modelTxt = modelSummary(p);
-    const dotStyle = p.icon_color ? ' style="background:' + escapeHtml(p.icon_color) + '"' : "";
-    return (
-      '<div class="prow' + (active ? " pactive" : "") + '" data-id="' + escapeHtml(p.id) + '">' +
-        '<div class="prow-top">' +
-          '<span class="pico"' + dotStyle + "></span>" +
-          '<span class="pname">' + escapeHtml(p.name) + "</span>" +
-          '<span class="badge">' + escapeHtml(catLabel) + "</span>" +
-          (active ? '<span class="badge on">当前生效</span>' : "") +
-        "</div>" +
-        '<div class="pmeta">' + escapeHtml(p.base_url || "（未填地址）") + "</div>" +
-        '<div class="pmeta">模型：' + modelTxt + " · Key：" + keyMask + "</div>" +
-        '<div class="prow-acts">' +
-          (active ? "" : '<button class="abtn prim" data-act="activate">设为当前</button>') +
-          '<button class="abtn" data-act="editconn">编辑连接</button>' +
-          '<button class="abtn" data-act="editmeta">改名</button>' +
-          '<button class="abtn" data-act="clearkey">清 key</button>' +
-          '<button class="abtn danger" data-act="delete">删除</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }).join("");
+    const row = document.createElement("div");
+    row.className = "prow" + (active ? " pactive" : "");
+    row.dataset.id = String(p.id ?? "");
+
+    const top = document.createElement("div");
+    top.className = "prow-top";
+    const dot = document.createElement("span");
+    dot.className = "pico";
+    setSafeBackground(dot, p.icon_color);
+    top.appendChild(dot);
+    top.appendChild(textEl("span", "pname", p.name));
+    top.appendChild(textEl("span", "badge", catLabel));
+    if (active) top.appendChild(textEl("span", "badge on", "当前生效"));
+
+    row.appendChild(top);
+    row.appendChild(textEl("div", "pmeta", p.base_url || "（未填地址）"));
+    row.appendChild(textEl("div", "pmeta", `模型：${modelTxt} · Key：${keyMask}`));
+
+    const acts = document.createElement("div");
+    acts.className = "prow-acts";
+    const addAction = (act, label, className = "abtn") => {
+      const btn = document.createElement("button");
+      btn.className = className;
+      btn.dataset.act = act;
+      btn.textContent = label;
+      acts.appendChild(btn);
+    };
+    if (!active) addAction("activate", "设为当前", "abtn prim");
+    addAction("editconn", "编辑连接");
+    addAction("editmeta", "改名");
+    addAction("clearkey", "清 key");
+    addAction("delete", "删除", "abtn danger");
+    row.appendChild(acts);
+    list.appendChild(row);
+  }
 }
 
 // ── 模式（第三方 / 官方）──
@@ -491,7 +549,7 @@ function renderModelOptions(sel, models, sourceLabel) {
   const listId = sel.getAttribute("list");
   const dl = listId && document.getElementById(listId);
   if (!dl) return;
-  dl.innerHTML = "";
+  clearChildren(dl);
   for (const m of models || []) {
     const o = document.createElement("option");
     o.value = m.id;
@@ -534,17 +592,22 @@ function openWizard() {
 }
 
 function renderTemplateChips() {
-  els.wizTemplateChips.innerHTML = (state.templates || []).map((t) => {
-    const dot = t.icon_color ? ' style="background:' + escapeHtml(t.icon_color) + '"' : "";
+  clearChildren(els.wizTemplateChips);
+  for (const t of state.templates || []) {
     const cat = CAT_LABELS[t.category] || t.category || "";
-    return (
-      '<button type="button" class="chip" aria-pressed="false" data-tid="' + escapeHtml(t.id) + '">' +
-        '<span class="chip-dot"' + dot + "></span>" +
-        '<span class="chip-name">' + escapeHtml(t.name) + "</span>" +
-        '<span class="chip-cat">' + escapeHtml(cat) + "</span>" +
-      "</button>"
-    );
-  }).join("");
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.setAttribute("aria-pressed", "false");
+    chip.dataset.tid = String(t.id ?? "");
+    const dot = document.createElement("span");
+    dot.className = "chip-dot";
+    setSafeBackground(dot, t.icon_color);
+    chip.appendChild(dot);
+    chip.appendChild(textEl("span", "chip-name", t.name));
+    chip.appendChild(textEl("span", "chip-cat", cat));
+    els.wizTemplateChips.appendChild(chip);
+  }
 }
 
 function selectWizTemplate(id) {
@@ -928,39 +991,50 @@ async function runDoctor() {
   }
 }
 
-// 简单 semver 比较：a 是否比 b 新。
-function isNewer(a, b) {
-  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] || 0, y = pb[i] || 0;
-    if (x !== y) return x > y;
+function renderUpdateStatus(info, announce) {
+  if (!info || !els.updateBtn) return;
+  lastUpdateCheck = info;
+  const cur = info.current_version || "";
+  const latest = info.latest_version || "";
+  els.updateBtn.classList.toggle("update-available", !!info.update_available);
+  els.updateBtn.textContent = info.update_available ? "有新版本可用" : "检查更新";
+  els.updateBtn.title = info.update_available && latest
+    ? "有新版本可用：v" + latest
+    : "检查 GitHub Releases 最新版本";
+  if (els.verLabel && cur) {
+    els.verLabel.textContent = info.update_available && latest
+      ? "v" + cur + " → v" + latest
+      : "v" + cur;
   }
-  return false;
+  if (announce && info.update_available) {
+    setMsg("有新版本可用：v" + latest + "（当前 v" + cur + "）。", "ok");
+  }
+}
+
+async function pollUpdateStatus(announce) {
+  try {
+    const info = await call("check_updates");
+    renderUpdateStatus(info, !!announce);
+    return info;
+  } catch (e) {
+    if (announce) {
+      setMsg("无法自动检查更新（多为网络或代理限制）。已打开 Releases 页，请手动查看。", "err");
+    }
+    return null;
+  }
 }
 
 async function checkUpdate() {
   setMsg("检查更新中…");
-  let cur = "";
-  try { cur = await call("app_version"); } catch (e) {}
-  try {
-    const resp = await fetch(
-      "https://api.github.com/repos/HERRY423/BioCSSwitch/releases/latest",
-      { headers: { Accept: "application/vnd.github+json" } }
-    );
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
-    const latest = (data.tag_name || "").replace(/^v/, "");
-    if (!latest) throw new Error("无版本信息");
-    if (isNewer(latest, cur)) {
-      setMsg("发现新版本 v" + latest + "（当前 v" + cur + "）。正在打开下载页…", "ok");
-      try { await call("open_release_page"); } catch (_) {}
-    } else {
-      setMsg("已是最新版本（v" + cur + "）。", "ok");
-    }
-  } catch (e) {
-    setMsg("无法自动检查更新（多为网络或代理限制）。已打开 Releases 页，请手动查看。", "err");
+  const info = await pollUpdateStatus(true);
+  if (!info) {
     try { await call("open_release_page"); } catch (_) {}
+    return;
+  }
+  if (info.update_available) {
+    try { await call("open_release_page"); } catch (_) {}
+  } else {
+    setMsg("已是最新版本（v" + (info.current_version || "") + "）。", "ok");
   }
 }
 
@@ -1062,11 +1136,6 @@ function _msg(id, text, kind) {
   el.textContent = text || "";
   el.className = "msg" + (kind ? " " + kind : "");
 }
-function _escHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
 async function loadPacks() {
   try { _packState = await call("list_packs"); }
   catch (e) { _msg("packMsg", "读取工具包列表失败：" + e, "err"); return; }
@@ -1081,17 +1150,30 @@ function _renderExperimentalBanner() {
   if (!el || !_packState) return;
   const v = _packState.verification || {};
   const exp = v.is_experimental !== false;
+  clearChildren(el);
   if (v.stale) {
     const reasons = (v.stale_reasons || []).join("；");
-    el.innerHTML = `⚠ <strong>验证结果可能过期</strong>：${_escHtml(reasons)}。建议重跑 canary 验证。`;
+    appendText(el, "⚠ ");
+    el.appendChild(textEl("strong", "", "验证结果可能过期"));
+    appendText(el, `：${reasons}。建议重跑 canary 验证。`);
     return;
   }
   const fp = v.fingerprint || {};
   const fpNote = (fp.science_version_at_pass && fp.science_version_at_pass !== "unknown")
-    ? `（验证时 Science ${_escHtml(fp.science_version_at_pass)}）` : "";
-  el.innerHTML = exp
-    ? 'pack 机制的两个关键路径（<code>mcp-servers.json</code> 与 <code>skills/</code>）<strong>尚未确认</strong>。所有 pack 目前按<strong>实验状态</strong>装配。跑一次 canary smoke test 即可确认。'
-    : `✓ 路径已验证。pack 装配可信度：高。${fpNote}`;
+    ? `（验证时 Science ${fp.science_version_at_pass}）` : "";
+  if (exp) {
+    appendText(el, "pack 机制的两个关键路径（");
+    el.appendChild(textEl("code", "", "mcp-servers.json"));
+    appendText(el, " 与 ");
+    el.appendChild(textEl("code", "", "skills/"));
+    appendText(el, "）");
+    el.appendChild(textEl("strong", "", "尚未确认"));
+    appendText(el, "。所有 pack 目前按");
+    el.appendChild(textEl("strong", "", "实验状态"));
+    appendText(el, "装配。跑一次 canary smoke test 即可确认。");
+  } else {
+    el.textContent = `✓ 路径已验证。pack 装配可信度：高。${fpNote}`;
+  }
 }
 
 function renderPacks() {
@@ -1099,34 +1181,48 @@ function renderPacks() {
   const envList = document.getElementById("packEnvList");
   if (!list || !envList || !_packState) return;
   const { packs, enabled, env_set } = _packState;
-  list.innerHTML = "";
+  clearChildren(list);
   for (const p of packs || []) {
     const on = !!(enabled || {})[p.id];
     const row = document.createElement("div");
     row.className = "packrow";
     const missing = (p.requires_env || []).filter((k) => !(env_set || {})[k]);
-    const chip = missing.length
-      ? `<span class="chip warn" title="缺环境变量">缺 ${missing.join(", ")}</span>` : "";
-    const dep = (p.depends_on && p.depends_on.length)
-      ? `<span class="chip">依赖 ${p.depends_on.join(", ")}</span>` : "";
     // 未通过 phase-1 验证时统一标"实验中"
     const isExp = ((_packState.verification || {}).is_experimental !== false);
-    const expChip = (on && isExp)
-      ? `<span class="chip warn" title="MCP / Skill 路径尚未验证，请去『验证』折叠区跑 canary">实验中</span>` : "";
-    row.innerHTML = `
-      <label class="packchk">
-        <input type="checkbox" data-pack="${_escHtml(p.id)}" ${on ? "checked" : ""}>
-        <span class="packname">${_escHtml(p.name)}</span>
-        ${dep}${chip}${expChip}
-      </label>
-      <div class="packdesc">${_escHtml(p.description)}</div>`;
+
+    const label = document.createElement("label");
+    label.className = "packchk";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.pack = String(p.id ?? "");
+    input.checked = on;
+    label.appendChild(input);
+    label.appendChild(textEl("span", "packname", p.name));
+
+    const deps = (p.dependencies && p.dependencies.length) ? p.dependencies : (p.depends_on || []);
+    if (deps.length) {
+      label.appendChild(textEl("span", "chip", `依赖 ${deps.join(", ")}`));
+    }
+    if (missing.length) {
+      const missingChip = textEl("span", "chip warn", `缺 ${missing.join(", ")}`);
+      missingChip.title = "缺环境变量";
+      label.appendChild(missingChip);
+    }
+    if (on && isExp) {
+      const expChip = textEl("span", "chip warn", "实验中");
+      expChip.title = "MCP / Skill 路径尚未验证，请去『验证』折叠区跑 canary";
+      label.appendChild(expChip);
+    }
+
+    row.appendChild(label);
+    row.appendChild(textEl("div", "packdesc", p.description));
     list.appendChild(row);
   }
   list.querySelectorAll('input[type="checkbox"][data-pack]').forEach((cb) =>
     cb.addEventListener("change", () => togglePack(cb.dataset.pack, cb.checked, cb)));
 
   const seen = new Set();
-  envList.innerHTML = "";
+  clearChildren(envList);
   for (const p of (packs || [])) {
     for (const oe of p.optional_env || []) {
       if (seen.has(oe.name)) continue;
@@ -1134,15 +1230,30 @@ function renderPacks() {
       const row = document.createElement("div");
       row.className = "packenvrow";
       const has = !!(env_set || {})[oe.name];
-      row.innerHTML = `
-        <label class="packenvlabel">
-          ${_escHtml(oe.label || oe.name)}
-          ${oe.url ? ` <a href="${_escHtml(oe.url)}" target="_blank" class="link">申请</a>` : ""}
-        </label>
-        <div class="row">
-          <input type="password" data-env="${_escHtml(oe.name)}" placeholder="${has ? "已存（末位掩码）" : "留空清除"}" autocomplete="off" spellcheck="false">
-          <button class="btn small" data-env-save="${_escHtml(oe.name)}">保存</button>
-        </div>`;
+      const label = textEl("label", "packenvlabel", oe.label || oe.name);
+      if (oe.url) {
+        const link = textEl("a", "link", "申请");
+        if (applySafeExternalLink(link, oe.url)) {
+          appendText(label, " ");
+          label.appendChild(link);
+        }
+      }
+      const formRow = document.createElement("div");
+      formRow.className = "row";
+      const input = document.createElement("input");
+      input.type = "password";
+      input.dataset.env = String(oe.name ?? "");
+      input.placeholder = has ? "已存（末位掩码）" : "留空清除";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      const btn = document.createElement("button");
+      btn.className = "btn small";
+      btn.dataset.envSave = String(oe.name ?? "");
+      btn.textContent = "保存";
+      formRow.appendChild(input);
+      formRow.appendChild(btn);
+      row.appendChild(label);
+      row.appendChild(formRow);
       envList.appendChild(row);
     }
   }
@@ -1255,38 +1366,59 @@ function renderTasks() {
   const routes = _tasksState.routes || {};
   const active = _tasksState.active_id || "";
   const probes = _tasksState.probes || {};
-  list.innerHTML = "";
+  clearChildren(list);
   for (const t of _tasksState.tasks || []) {
     const routedTo = routes[t.id] || "";
     const currentId = routedTo || active;
     const currentName = ((profiles.find((p) => p.id === currentId) || {}).name) || "(无生效)";
-    // 探针 chips
-    const chipHtml = ["tool_use", "long_ctx", "json_stable",
-                      "bio_eval_lit_review", "bio_eval_clinical_trials", "bio_eval_evidence_audit"]
-      .map((probe) => {
-        const key = `${currentId}:${probe}`;
-        const raw = probes[key];
-        if (!raw) return "";
-        const verdict = raw.verdict || "?";
-        const cls = verdict === "ok" || verdict === "✓" || verdict === "✓✓" ? "" : "warn";
-        return `<span class="chip ${cls}" title="${_escHtml(raw.reason || "")}">${_escHtml(probe)}: ${_escHtml(verdict)}</span>`;
-      }).join("");
-    const options = [`<option value="">(默认，跟随生效)</option>`]
-      .concat(profiles.map((p) =>
-        `<option value="${_escHtml(p.id)}" ${routedTo === p.id ? "selected" : ""}>${_escHtml(p.name)}</option>`
-      )).join("");
     const row = document.createElement("div");
     row.className = "taskrow";
-    row.innerHTML = `
-      <div class="taskhd">
-        <span class="taskname">${_escHtml(t.label)}</span>
-        <span class="taskprofile">当前：${_escHtml(currentName)}</span>
-      </div>
-      <div class="taskhint">${_escHtml(t.hint)}</div>
-      <div class="row">
-        <select data-task="${_escHtml(t.id)}">${options}</select>
-      </div>
-      <div class="taskchips">${chipHtml || '<span class="chip">尚无探针数据</span>'}</div>`;
+
+    const head = document.createElement("div");
+    head.className = "taskhd";
+    head.appendChild(textEl("span", "taskname", t.label));
+    head.appendChild(textEl("span", "taskprofile", `当前：${currentName}`));
+    row.appendChild(head);
+    row.appendChild(textEl("div", "taskhint", t.hint));
+
+    const formRow = document.createElement("div");
+    formRow.className = "row";
+    const select = document.createElement("select");
+    select.dataset.task = String(t.id ?? "");
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "(默认，跟随生效)";
+    select.appendChild(defaultOption);
+    for (const p of profiles) {
+      const option = document.createElement("option");
+      option.value = String(p.id ?? "");
+      option.selected = routedTo === p.id;
+      option.textContent = String(p.name ?? "");
+      select.appendChild(option);
+    }
+    formRow.appendChild(select);
+    row.appendChild(formRow);
+
+    const chips = document.createElement("div");
+    chips.className = "taskchips";
+    let hasChip = false;
+    for (const probe of ["tool_use", "long_ctx", "json_stable",
+                         "bio_eval_lit_review", "bio_eval_clinical_trials", "bio_eval_evidence_audit"]) {
+      const key = `${currentId}:${probe}`;
+      const raw = probes[key];
+      if (!raw) continue;
+      const verdict = raw.verdict || "?";
+      const chip = textEl(
+        "span",
+        "chip" + (verdict === "ok" || verdict === "✓" || verdict === "✓✓" ? "" : " warn"),
+        `${probe}: ${verdict}`,
+      );
+      chip.title = String(raw.reason || "");
+      chips.appendChild(chip);
+      hasChip = true;
+    }
+    if (!hasChip) chips.appendChild(textEl("span", "chip", "尚无探针数据"));
+    row.appendChild(chips);
     list.appendChild(row);
   }
   list.querySelectorAll("select[data-task]").forEach((sel) => {
@@ -1424,10 +1556,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   await loadPacks();
   await loadTasks();
   try { els.verLabel.textContent = "v" + (await call("app_version")); } catch (e) {}
+  pollUpdateStatus(false);
   await refreshStatus();
   if (PREVIEW) {
     setMsg("预览模式：仅看界面，按钮不连后端（真实 app 里会连进程管家）。");
   } else {
     statusTimer = setInterval(refreshStatus, 2500);
+    updateTimer = setInterval(() => pollUpdateStatus(false), UPDATE_CHECK_INTERVAL_MS);
   }
 });

@@ -15,7 +15,8 @@ python3 test/test_bio_offline.py
 Evidence:
 
 - `test_pack_manifests` parses every `packs/*/pack.json`.
-- Every `depends_on` target must exist.
+- Every `dependencies` target must exist (`depends_on` is only a compatibility alias).
+- Every manifest declares `version` and `requires_tools`, and the repository ships `packs/pack.schema.json`.
 - Dependency graph must be acyclic.
 - Every server script and Skill directory referenced by a manifest must exist.
 - `desktop/src-tauri/src/packs.rs` expands enabled packs to their dependency

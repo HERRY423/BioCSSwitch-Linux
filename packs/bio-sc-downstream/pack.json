@@ -3,6 +3,12 @@
   "name": "单细胞下游分析配方",
   "description": "scRNA-seq 下游分析的确定性配方生成器：差异基因表达（pseudobulk DESeq2 + Wilcoxon + MAST）、轨迹与 RNA velocity（scVelo + PAGA + DPT + Monocle3）、细胞间通信（CellChat + LIANA + NicheNet）、marker gene 分析与富集。产出可复现脚本 + provenance，不代跑分析。",
   "version": "0.1.0",
+  "dependencies": ["bio-singlecell"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"},
+    {"name": "DESeq2", "kind": "R/Bioconductor", "required": false, "purpose": "Generated pseudobulk DEG workflows"},
+    {"name": "scvelo", "kind": "python", "required": false, "purpose": "Generated RNA velocity workflows"}
+  ],
   "requires_env": [],
   "optional_env": [],
   "depends_on": ["bio-singlecell"],

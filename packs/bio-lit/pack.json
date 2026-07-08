@@ -3,6 +3,10 @@
   "name": "生物医学文献检索",
   "description": "PubMed / Europe PMC / Crossref / bioRxiv / medRxiv 的本地 MCP 检索工具。所有源都是公开免鉴权，NCBI E-utilities 可选填 API key 提高配额。",
   "version": "0.1.0",
+  "dependencies": [],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP servers"}
+  ],
   "requires_env": [],
   "optional_env": [
     {

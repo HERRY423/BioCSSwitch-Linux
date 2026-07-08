@@ -47,6 +47,7 @@ _SERVER_MODULE_PATHS = [
     "bio-scfm/scfm_server.py",
     "bio-sc-atlas/atlas_server.py",
     "bio-spatial/spatial_server.py",
+    "bio-ml/ml_server.py",
 ]
 
 

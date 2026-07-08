@@ -24,7 +24,8 @@ BioCSSwitch bio-v0.3.6 merges the upstream CSSwitch 0.3.6 provider baseline into
 
 - **New spatial biology support**
   - Adds `bio-spatial` for spatial transcriptomics planning and review.
-  - Includes platform guidance for Xenium, Visium HD, MERFISH-style workflows, spatial preprocessing recipes, rare-cell deconvolution guardrails, spatial foundation model planning, and IPF/KRT17-focused report contracts.
+  - Includes platform guidance for Xenium, Visium HD, MERFISH, Stereo-seq, DBiT-seq, GeoMx and emerging imaging workflows.
+  - Adds spatial-domain/SVG, cell-cell communication, spatial multi-omics, H&E-to-ST, 3D/4D atlas, translation-readiness, rare-cell deconvolution, spatial foundation model and IPF/KRT17 report contracts.
 
 - **Ultra / WellFallback orchestration**
   - Adds task routing, fallback policy, and ultra orchestration modules.

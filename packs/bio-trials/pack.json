@@ -3,6 +3,10 @@
   "name": "临床试验检索",
   "description": "ClinicalTrials.gov v2 API 检索：按病症 / 干预 / 期别 / 状态 / 位置查询试验，拉单个 NCT 的完整方案。",
   "version": "0.1.0",
+  "dependencies": [],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"}
+  ],
   "requires_env": [],
   "servers": [
     {

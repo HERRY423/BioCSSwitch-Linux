@@ -23,6 +23,7 @@ GRADE（Grading of Recommendations Assessment, Development and Evaluation）是�
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _lib.server import MCPServer  # noqa: E402
 
 
-server = MCPServer("bio-audit-grade", "0.2.0")
+server = MCPServer("bio-audit-grade", "0.3.0")
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,195 @@ _UPGRADE_ZH = {
 _SERIOUS_POINTS = {"not_serious": 0, "none": 0, "serious": -1, "very_serious": -2}
 _LARGE_POINTS = {"none": 0, "large": 1, "very_large": 2}
 _PRESENT_POINTS = {"none": 0, "present": 1, "would_reduce": 1}
+
+# Cochrane RoB 2-style signalling domains for randomized trials.  We keep the
+# data model generic enough to accept ROBINS-I / custom domains too, but these
+# names make the exported dossier easy to align with RoB 2 templates.
+_ROB2_DOMAINS = [
+    "randomization_process",
+    "deviations_from_intended_interventions",
+    "missing_outcome_data",
+    "measurement_of_outcome",
+    "selection_of_reported_result",
+]
+_ROB_POINTS = {
+    "low": 0.0,
+    "low_risk": 0.0,
+    "not_serious": 0.0,
+    "some_concerns": 1.0,
+    "some concern": 1.0,
+    "unclear": 1.0,
+    "serious": 1.0,
+    "high": 2.0,
+    "high_risk": 2.0,
+    "very_serious": 2.0,
+    "critical": 2.0,
+}
+
+
+def _normalise_rating(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _weight_for_study(study: Dict[str, Any]) -> float:
+    for key in ("n_analyzed", "n_randomized", "n_participants", "n"):
+        try:
+            v = float(study.get(key) or 0)
+        except (TypeError, ValueError):
+            v = 0.0
+        if v > 0:
+            return v
+    return 1.0
+
+
+def _study_design_start(study: Dict[str, Any]) -> tuple[int, bool]:
+    start, _, is_rct = _start_certainty(
+        str(study.get("design") or study.get("study_design") or ""),
+        study.get("underlying_design"),
+    )
+    return start, is_rct
+
+
+def _body_start_certainty(
+    fallback_design: str,
+    underlying_design: Optional[str],
+    studies: Optional[List[Dict[str, Any]]] = None,
+) -> tuple[int, List[str], bool, Dict[str, Any]]:
+    """Estimate starting certainty from the body composition, not one label."""
+    if not studies:
+        start, warns, is_rct = _start_certainty(fallback_design, underlying_design)
+        return start, warns, is_rct, {
+            "model": "single_design_label",
+            "design": fallback_design,
+            "underlying_design": underlying_design,
+            "start_score": start,
+        }
+
+    weighted_scores: List[tuple[int, float, bool, str]] = []
+    for study in studies:
+        score, is_rct = _study_design_start(study)
+        weighted_scores.append((
+            score,
+            _weight_for_study(study),
+            is_rct,
+            str(study.get("design") or study.get("study_design") or "unknown").lower(),
+        ))
+
+    total_w = sum(w for _, w, _, _ in weighted_scores) or 1.0
+    mean_score = sum(score * w for score, w, _, _ in weighted_scores) / total_w
+    # Conservative discretisation: a mixed RCT/observational body can start at
+    # Moderate rather than pretending all evidence has RCT-level certainty.
+    if mean_score >= 3.5:
+        start = 4
+    elif mean_score >= 2.5:
+        start = 3
+    elif mean_score >= 1.5:
+        start = 2
+    else:
+        start = 1
+    rct_weight = sum(w for _, w, is_rct, _ in weighted_scores if is_rct) / total_w
+    design_mix = Counter(design for _, _, _, design in weighted_scores)
+    warnings: List[str] = []
+    if len(design_mix) > 1:
+        warnings.append(
+            "证据体纳入了混合设计；起始确定性按样本量加权的证据体组成估计，"
+            "请确认没有把 RCT 与观察性研究机械合并。"
+        )
+    return start, warnings, rct_weight >= 0.75, {
+        "model": "sample_size_weighted_body_design",
+        "mean_start_score": round(mean_score, 3),
+        "start_score": start,
+        "rct_weight": round(rct_weight, 3),
+        "design_mix": dict(design_mix),
+        "n_studies": len(studies),
+        "weight_total": total_w,
+    }
+
+
+def _study_rob_assessment(study: Dict[str, Any], outcome_id: Optional[str] = None) -> Dict[str, Any]:
+    per_outcome = study.get("outcome_risk_of_bias") or study.get("outcome_rob") or {}
+    if outcome_id and isinstance(per_outcome, dict) and outcome_id in per_outcome:
+        rob = per_outcome.get(outcome_id) or {}
+    else:
+        rob = study.get("risk_of_bias") or study.get("rob") or {}
+    if not isinstance(rob, dict):
+        rob = {"overall": rob}
+    return rob
+
+
+def _rob_points(rob: Dict[str, Any]) -> tuple[float, str, Dict[str, Any]]:
+    domains = rob.get("domains") if isinstance(rob.get("domains"), dict) else {}
+    domain_scores = []
+    normalized_domains: Dict[str, Any] = {}
+    for dom, rating in domains.items():
+        norm = _normalise_rating(rating)
+        pts = _ROB_POINTS.get(norm, 1.0)
+        domain_scores.append(pts)
+        normalized_domains[dom] = {"rating": rating, "points": pts}
+    overall = _normalise_rating(rob.get("overall") or rob.get("judgement") or rob.get("judgment"))
+    if overall:
+        overall_points = _ROB_POINTS.get(overall, max(domain_scores or [1.0]))
+    elif domain_scores:
+        overall_points = max(domain_scores)
+        overall = max(normalized_domains.items(), key=lambda kv: kv[1]["points"])[1]["rating"]
+    else:
+        overall_points = 1.0
+        overall = "unclear"
+    return float(overall_points), str(overall), normalized_domains
+
+
+def _derive_risk_of_bias_domain(
+    studies: List[Dict[str, Any]],
+    outcome_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not studies:
+        return {
+            "rating": "serious",
+            "reason": "未提供 study-level RoB；无法量化偏倚风险，保守按 serious。",
+            "evidence": {"model": "missing_study_level_rob"},
+        }
+    rows = []
+    total_w = 0.0
+    weighted = 0.0
+    for study in studies:
+        rob = _study_rob_assessment(study, outcome_id)
+        pts, overall, domains = _rob_points(rob)
+        weight = _weight_for_study(study)
+        total_w += weight
+        weighted += pts * weight
+        rows.append({
+            "study_id": study.get("study_id") or study.get("id") or study.get("citation") or "<unknown>",
+            "weight": weight,
+            "overall": overall,
+            "points": pts,
+            "domains": domains,
+            "reason": rob.get("reason") or rob.get("support_for_judgement") or "",
+        })
+    mean = weighted / (total_w or 1.0)
+    if mean >= 1.5:
+        rating = "very_serious"
+    elif mean >= 0.5:
+        rating = "serious"
+    else:
+        rating = "not_serious"
+    high_weight = sum(r["weight"] for r in rows if r["points"] >= 2.0) / (total_w or 1.0)
+    concern_weight = sum(r["weight"] for r in rows if r["points"] >= 1.0) / (total_w or 1.0)
+    reason = (
+        f"study-level RoB 加权均值={mean:.2f}；"
+        f"high-risk 权重={high_weight:.0%}，some-concerns-or-worse 权重={concern_weight:.0%}。"
+    )
+    return {
+        "rating": rating,
+        "reason": reason,
+        "evidence": {
+            "model": "sample_size_weighted_rob2",
+            "outcome_id": outcome_id,
+            "weighted_mean": round(mean, 3),
+            "high_risk_weight": round(high_weight, 3),
+            "concern_or_worse_weight": round(concern_weight, 3),
+            "studies": rows,
+        },
+    }
 
 
 def _start_certainty(design: str, underlying_design: Optional[str]):
@@ -163,6 +353,10 @@ def _start_certainty(design: str, underlying_design: Optional[str]):
                 "type": "object",
                 "description": "Optional effect for SoF: {measure: 'RR'|'HR'|'OR'|'MD', value, ci_low, ci_high}.",
             },
+            "evidence_body": {
+                "type": "object",
+                "description": "Optional structured body of evidence: {studies:[{study_id, design, n_participants, risk_of_bias|outcome_risk_of_bias}]}. If present, starting certainty and risk_of_bias can be derived from the whole body.",
+            },
         },
         "required": ["outcome", "design", "domains"],
     },
@@ -171,9 +365,29 @@ def grade_outcome(outcome: str, design: str, domains: Dict[str, Any],
                   underlying_design: Optional[str] = None,
                   n_studies: Optional[int] = None, n_participants: Optional[int] = None,
                   upgrades: Optional[Dict[str, Any]] = None,
-                  effect: Optional[Dict[str, Any]] = None):
-    start, start_warns, is_rct = _start_certainty(design, underlying_design)
+                  effect: Optional[Dict[str, Any]] = None,
+                  evidence_body: Optional[Dict[str, Any]] = None):
+    body_studies = []
+    outcome_id = outcome
+    if isinstance(evidence_body, dict):
+        body_studies = [
+            s for s in (evidence_body.get("studies") or [])
+            if isinstance(s, dict)
+        ]
+        outcome_id = evidence_body.get("outcome_id") or outcome
+    start, start_warns, is_rct, start_model = _body_start_certainty(
+        design,
+        underlying_design,
+        body_studies,
+    )
     warnings: List[str] = list(start_warns)
+    domains = dict(domains or {})
+    evidence_body_model: Dict[str, Any] = {"starting_certainty": start_model}
+    if body_studies:
+        evidence_body_model["risk_of_bias"] = _derive_risk_of_bias_domain(body_studies, outcome_id)
+        rob = domains.get("risk_of_bias") or {}
+        if not isinstance(rob, dict) or not rob.get("rating"):
+            domains["risk_of_bias"] = evidence_body_model["risk_of_bias"]
 
     # ---- 降级 ----
     downgrade_total = 0
@@ -242,10 +456,140 @@ def grade_outcome(outcome: str, design: str, domains: Dict[str, Any],
         "upgrade_detail": upgrade_detail,
         "why": certainty_reasons,
         "warnings": warnings,
+        "evidence_body_model": evidence_body_model,
         "n_studies": n_studies,
         "n_participants": n_participants,
         "effect": effect,
     }
+
+
+def _studies_for_outcome(studies: List[Dict[str, Any]], outcome_id: str) -> List[Dict[str, Any]]:
+    selected = []
+    for study in studies:
+        declared = study.get("outcomes") or study.get("outcome_ids")
+        if not declared or outcome_id in declared:
+            selected.append(study)
+    return selected
+
+
+def _outcome_domains_from_dossier(outcome: Dict[str, Any], studies: List[Dict[str, Any]]) -> Dict[str, Any]:
+    domains = dict(outcome.get("domains") or {})
+    outcome_id = outcome.get("id") or outcome.get("outcome") or outcome.get("name") or ""
+    if studies and not (domains.get("risk_of_bias") or {}).get("rating"):
+        domains["risk_of_bias"] = _derive_risk_of_bias_domain(studies, outcome_id)
+    return domains
+
+
+@server.tool(
+    "grade_evidence_dossier",
+    "Build and grade a structured GRADE evidence dossier. The dossier models a BODY OF EVIDENCE: "
+    "one PICO/question, shared included studies with RoB 2-style study/outcome risk-of-bias records, "
+    "and multiple critical/important outcomes. The tool derives body-level starting certainty from the "
+    "study mix, aggregates study-level risk of bias into a GRADE domain, grades every outcome, and emits "
+    "a GRADEpro-like evidence profile / Summary of Findings payload plus Markdown.",
+    {
+        "type": "object",
+        "properties": {
+            "dossier": {
+                "type": "object",
+                "description": "Structured dossier: {question|pico, studies:[{study_id, design, n_participants, risk_of_bias:{overall,domains,reason}, outcomes}], outcomes:[{id,outcome,criticality,domains,upgrades,effect}]}.",
+            },
+            "language": {"type": "string", "enum": ["zh", "en"], "default": "zh"},
+        },
+        "required": ["dossier"],
+    },
+)
+def grade_evidence_dossier(dossier: Dict[str, Any], language: str = "zh"):
+    studies = [s for s in (dossier or {}).get("studies", []) if isinstance(s, dict)]
+    outcomes = [o for o in (dossier or {}).get("outcomes", []) if isinstance(o, dict)]
+    warnings: List[str] = []
+    if not outcomes:
+        return {
+            "schema": "bio-audit/grade-evidence-dossier/1",
+            "errors": ["dossier.outcomes is required and must contain at least one outcome"],
+            "warnings": warnings,
+        }
+    if not studies:
+        warnings.append("dossier.studies 为空；每个 outcome 将只能按显式 domains 评级，无法正式建模证据体。")
+
+    graded = []
+    outcome_profiles = []
+    for outcome in outcomes:
+        oid = outcome.get("id") or outcome.get("outcome") or outcome.get("name") or "outcome"
+        label = outcome.get("outcome") or outcome.get("name") or oid
+        scoped_studies = _studies_for_outcome(studies, oid)
+        n_p = outcome.get("n_participants")
+        if n_p is None and scoped_studies:
+            n_p = int(sum(_weight_for_study(s) for s in scoped_studies))
+        domains = _outcome_domains_from_dossier(outcome, scoped_studies)
+        graded_outcome = grade_outcome(
+            outcome=label,
+            design=outcome.get("design") or "body-of-evidence",
+            underlying_design=outcome.get("underlying_design"),
+            domains=domains,
+            upgrades=outcome.get("upgrades"),
+            effect=outcome.get("effect"),
+            n_studies=outcome.get("n_studies") or len(scoped_studies) or None,
+            n_participants=n_p,
+            evidence_body={"outcome_id": oid, "studies": scoped_studies},
+        )
+        graded_outcome["outcome_id"] = oid
+        graded_outcome["criticality"] = outcome.get("criticality", "important")
+        graded.append(graded_outcome)
+        outcome_profiles.append({
+            "outcome_id": oid,
+            "outcome": label,
+            "criticality": outcome.get("criticality", "important"),
+            "included_studies": [
+                s.get("study_id") or s.get("id") or s.get("citation") or "<unknown>"
+                for s in scoped_studies
+            ],
+            "certainty": graded_outcome["certainty"],
+            "certainty_score": graded_outcome["score"],
+            "domains": graded_outcome["downgrade_detail"],
+            "upgrades": graded_outcome["upgrade_detail"],
+            "effect": outcome.get("effect"),
+        })
+
+    body_start, body_warns, _, body_model = _body_start_certainty(
+        (dossier or {}).get("design") or "body-of-evidence",
+        (dossier or {}).get("underlying_design"),
+        studies,
+    )
+    warnings.extend(body_warns)
+    profile = {
+        "schema": "bio-audit/grade-evidence-dossier/1",
+        "method_basis": {
+            "certainty_domains": _DOWNGRADE_DOMAINS + _UPGRADE_DOMAINS,
+            "risk_of_bias_template": "RoB 2-style domains for randomized trials; accepts ROBINS/custom overall judgments too",
+            "presentation": "GRADE evidence profile / Summary of Findings table",
+        },
+        "question": dossier.get("question") or dossier.get("pico") or "",
+        "pico": dossier.get("pico") or {},
+        "body_of_evidence": {
+            "n_studies": len(studies),
+            "starting_certainty": _LEVEL_NAME[body_start],
+            "starting_certainty_model": body_model,
+            "study_ids": [
+                s.get("study_id") or s.get("id") or s.get("citation") or "<unknown>"
+                for s in studies
+            ],
+        },
+        "outcomes": outcome_profiles,
+        "graded_outcomes": graded,
+        "sof_markdown": grade_sof_table(graded_outcomes=graded, language=language),
+        "warnings": warnings,
+        "dossier_contract": {
+            "required_top_level": ["question or pico", "studies", "outcomes"],
+            "study_risk_of_bias": {
+                "overall": "low|some_concerns|high|critical",
+                "domains": _ROB2_DOMAINS,
+                "reason": "support for judgement / reviewer note",
+            },
+            "outcome_domains": _DOWNGRADE_DOMAINS,
+        },
+    }
+    return profile
 
 
 @server.tool(
@@ -343,6 +687,82 @@ def grade_explain():
 
 _CERTAINTY_SCORE = {"high": 4, "moderate": 3, "low": 2, "very low": 1, "very_low": 1}
 _BALANCE = {"favors_intervention", "favors_comparison", "balanced", "uncertain"}
+_VALUES = {"no_important_variability", "important_variability", "uncertain"}
+_RESOURCES = {"favors_intervention", "favors_comparison", "negligible", "uncertain"}
+_IMPLEMENTATION = {"favors_intervention", "favors_comparison", "balanced", "uncertain"}
+
+
+def _dist_from_value(obj: Any, allowed: set[str], default: str) -> Dict[str, float]:
+    if isinstance(obj, dict) and isinstance(obj.get("probabilities"), dict):
+        raw = obj["probabilities"]
+    elif isinstance(obj, dict) and isinstance(obj.get("distribution"), dict):
+        raw = obj["distribution"]
+    elif isinstance(obj, dict) and any(
+        (_normalise_rating(k) == "very_low" and "very low" in allowed) or _normalise_rating(k) in allowed
+        for k in obj.keys()
+    ):
+        raw = obj
+    elif isinstance(obj, dict):
+        rating = _normalise_rating(obj.get("rating") or default)
+        raw = {rating: 1.0}
+    else:
+        raw = {_normalise_rating(obj or default): 1.0}
+    out: Dict[str, float] = {}
+    for k, v in raw.items():
+        key = _normalise_rating(k)
+        if key == "very_low":
+            key = "very low"
+        if key in allowed:
+            try:
+                p = float(v)
+            except (TypeError, ValueError):
+                p = 0.0
+            if p > 0:
+                out[key] = out.get(key, 0.0) + p
+    if not out:
+        out[default] = 1.0
+    total = sum(out.values()) or 1.0
+    return {k: v / total for k, v in sorted(out.items())}
+
+
+def _etd_state_decision(certainty: str, balance: str, values: str, resources: str,
+                        equity: str, acceptability: str, feasibility: str) -> Dict[str, Any]:
+    c_score = _CERTAINTY_SCORE.get(_normalise_rating(certainty), 1)
+    if balance == "favors_intervention":
+        direction = "for"
+    elif balance == "favors_comparison":
+        direction = "against"
+    else:
+        direction = "no_clear_direction"
+    implementation_ok = all(
+        x not in {"favors_comparison", "uncertain"}
+        for x in (equity, acceptability, feasibility)
+    )
+    resource_conflicts = (
+        (direction == "for" and resources == "favors_comparison")
+        or (direction == "against" and resources == "favors_intervention")
+    )
+    strong = (
+        c_score >= 3
+        and direction in {"for", "against"}
+        and values == "no_important_variability"
+        and not resource_conflicts
+        and implementation_ok
+    )
+    utility = {
+        "favors_intervention": 1.0,
+        "favors_comparison": -1.0,
+        "balanced": 0.0,
+        "uncertain": 0.0,
+    }.get(balance, 0.0)
+    utility *= c_score / 4.0
+    if values == "important_variability":
+        utility *= 0.7
+    if resource_conflicts:
+        utility *= 0.75
+    if not implementation_ok:
+        utility *= 0.75
+    return {"direction": direction, "strength": "strong" if strong else "conditional", "utility": utility}
 
 
 @server.tool(
@@ -453,6 +873,125 @@ def etd_recommendation(certainty: str, benefit_harm_balance: Dict[str, Any],
         "warnings": warnings,
         "note": "certainty 只是 EtD 的一个维度；推荐强度由全部维度共同决定。"
                 "strong→'recommend'，conditional→'suggest'（GRADE 措辞惯例）。",
+    }
+
+
+@server.tool(
+    "etd_probabilistic_recommendation",
+    "Probabilistic GRADE Evidence-to-Decision. Accepts probability distributions for certainty, "
+    "benefit/harm balance, values, resources, equity, acceptability and feasibility, enumerates the "
+    "joint state space, and returns posterior probabilities for direction and strength. Use this when "
+    "panel judgments are uncertain or split instead of forcing a deterministic if-else recommendation.",
+    {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string"},
+            "certainty": {"type": "object", "description": "{probabilities:{High:0.4, Moderate:0.6}} or {rating:'High'}"},
+            "benefit_harm_balance": {"type": "object", "description": "{probabilities:{favors_intervention:0.7, balanced:0.3}} or {rating, reason}"},
+            "values_preferences": {"type": "object"},
+            "resources": {"type": "object"},
+            "equity": {"type": "object"},
+            "acceptability": {"type": "object"},
+            "feasibility": {"type": "object"},
+            "strong_threshold": {"type": "number", "default": 0.75},
+            "direction_threshold": {"type": "number", "default": 0.7},
+        },
+        "required": ["certainty", "benefit_harm_balance"],
+    },
+)
+def etd_probabilistic_recommendation(
+    certainty: Dict[str, Any],
+    benefit_harm_balance: Dict[str, Any],
+    question: str = "",
+    values_preferences: Optional[Dict[str, Any]] = None,
+    resources: Optional[Dict[str, Any]] = None,
+    equity: Optional[Dict[str, Any]] = None,
+    acceptability: Optional[Dict[str, Any]] = None,
+    feasibility: Optional[Dict[str, Any]] = None,
+    strong_threshold: float = 0.75,
+    direction_threshold: float = 0.7,
+):
+    cert_d = _dist_from_value(certainty, {"high", "moderate", "low", "very low"}, "low")
+    bal_d = _dist_from_value(benefit_harm_balance, _BALANCE, "uncertain")
+    val_d = _dist_from_value(values_preferences or {"rating": "uncertain"}, _VALUES, "uncertain")
+    res_d = _dist_from_value(resources or {"rating": "uncertain"}, _RESOURCES, "uncertain")
+    eq_d = _dist_from_value(equity or {"rating": "balanced"}, _IMPLEMENTATION, "balanced")
+    acc_d = _dist_from_value(acceptability or {"rating": "balanced"}, _IMPLEMENTATION, "balanced")
+    feas_d = _dist_from_value(feasibility or {"rating": "balanced"}, _IMPLEMENTATION, "balanced")
+
+    posterior = {
+        "direction": {"for": 0.0, "against": 0.0, "no_clear_direction": 0.0},
+        "strength": {"strong": 0.0, "conditional": 0.0},
+    }
+    expected_utility = 0.0
+    top_states: List[Dict[str, Any]] = []
+    for c, cp in cert_d.items():
+        for b, bp in bal_d.items():
+            for v, vp in val_d.items():
+                for r, rp in res_d.items():
+                    for e, ep in eq_d.items():
+                        for a, ap in acc_d.items():
+                            for f, fp in feas_d.items():
+                                p = cp * bp * vp * rp * ep * ap * fp
+                                decision = _etd_state_decision(c, b, v, r, e, a, f)
+                                posterior["direction"][decision["direction"]] += p
+                                posterior["strength"][decision["strength"]] += p
+                                expected_utility += p * decision["utility"]
+                                top_states.append({
+                                    "probability": p,
+                                    "certainty": c,
+                                    "benefit_harm_balance": b,
+                                    "values_preferences": v,
+                                    "resources": r,
+                                    "equity": e,
+                                    "acceptability": a,
+                                    "feasibility": f,
+                                    "direction": decision["direction"],
+                                    "strength": decision["strength"],
+                                })
+    top_states.sort(key=lambda x: x["probability"], reverse=True)
+    best_direction, p_direction = max(posterior["direction"].items(), key=lambda kv: kv[1])
+    p_strong = posterior["strength"]["strong"]
+    strength = "strong" if p_strong >= strong_threshold and p_direction >= direction_threshold else "conditional"
+    if best_direction == "no_clear_direction" or p_direction < direction_threshold:
+        statement = "Evidence-to-decision judgments remain uncertain; use shared decision-making and do not issue a directional recommendation."
+    else:
+        verb = "recommend" if strength == "strong" else "suggest"
+        statement = (
+            f"We {verb} using the intervention."
+            if best_direction == "for"
+            else f"We {verb} against the intervention."
+        )
+    warnings = []
+    if posterior["direction"]["no_clear_direction"] >= 0.25:
+        warnings.append("≥25% posterior mass has no clear direction; panel discussion should focus on benefit/harm uncertainty.")
+    if posterior["strength"]["strong"] > 0 and strength != "strong":
+        warnings.append("Some states support a strong recommendation, but posterior confidence does not pass thresholds.")
+    return {
+        "question": question,
+        "posterior": {
+            "direction": {k: round(v, 4) for k, v in posterior["direction"].items()},
+            "strength": {k: round(v, 4) for k, v in posterior["strength"].items()},
+        },
+        "expected_utility": round(expected_utility, 4),
+        "direction": best_direction,
+        "strength": strength,
+        "statement": statement,
+        "thresholds": {
+            "strong_threshold": strong_threshold,
+            "direction_threshold": direction_threshold,
+        },
+        "input_distributions": {
+            "certainty": cert_d,
+            "benefit_harm_balance": bal_d,
+            "values_preferences": val_d,
+            "resources": res_d,
+            "equity": eq_d,
+            "acceptability": acc_d,
+            "feasibility": feas_d,
+        },
+        "top_joint_states": top_states[:8],
+        "warnings": warnings,
     }
 
 

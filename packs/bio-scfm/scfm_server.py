@@ -21,6 +21,8 @@ embedding 的编码器；它们没有"意见"，只有确定性的数值输出�
   scfm_embed_plan         — 产出 embedding 运行脚本 + provenance 骨架
   scfm_finetune_plan      — Geneformer / scGPT fine-tuning skeleton + provenance 骨架
   scfm_embed_quality      — embedding 质量度量配方（batch mixing / bio conservation / scIB）
+  scfm_benchmark_plan     — scFM benchmark 子任务边界 + 科学验证 hook/goal-loop 合约
+  scfm_benchmark_verify   — 验证 AUPRC/CI/split/seed/leakage/baseline，决定 pass/retry/fail
   scfm_preprocess_recipe_ext — CellFM / UCE 专用预处理配方
   scfm_provenance_record  — 构造带 content hash 的规范 provenance 记录
   scfm_provenance_verify  — 重算哈希 + 校验必填字段完整性（把"没记全"暴露出来）
@@ -42,6 +44,7 @@ from _lib.server import MCPServer  # noqa: E402
 server = MCPServer("bio-scfm", "0.2.0")
 
 PROVENANCE_SCHEMA = "bio-scfm/embedding-provenance/1"
+BENCHMARK_RESULT_SCHEMA = "bio-scfm/benchmark-result/1"
 
 # 已钉版本的模型登记表。版本/‑checkpoint 取自各自官方发布；用户应在 registry 里核对
 # 自己实际装的版本（工具会把它记进 provenance，不是替用户断言）。
@@ -540,6 +543,414 @@ sc.pp.neighbors(adata, use_rep="{embedding_key}")
 sc.tl.umap(adata)
 sc.pl.umap(adata, color=[c for c in ["{batch_key}", "{celltype_key}", "leiden"] if c in adata.obs], save="_embedding_quality.png")
 '''
+
+
+_BENCHMARK_TASKS = {
+    "rare_cell_detection": {
+        "default_metric": "auprc",
+        "must_have": [
+            "dataset.positive_label",
+            "run.alpha",
+            "audits.ground_truth_threshold_blinded",
+        ],
+        "notes": [
+            "Rare-cell claims should use AUPRC rather than accuracy because prevalence is low.",
+            "For KRT17/IPF-style tasks, GMM/marker-threshold ground truth must be generated without looking at test predictions.",
+        ],
+    },
+    "cell_type_annotation": {
+        "default_metric": "macro_f1",
+        "must_have": [],
+        "notes": ["Report macro-F1 and per-class support; do not hide poor rare-class recall behind micro-average metrics."],
+    },
+    "reference_mapping": {
+        "default_metric": "balanced_accuracy",
+        "must_have": [],
+        "notes": ["Hold out donors or studies when possible; cell-level random splits can overstate atlas-transfer performance."],
+    },
+    "embedding_quality": {
+        "default_metric": "biology_conservation",
+        "must_have": [],
+        "notes": ["Pair batch-mixing metrics with biology-conservation metrics; UMAP appearance is not a metric."],
+    },
+}
+
+
+def _default_benchmark_models(models: Optional[List[str]]) -> List[str]:
+    if not models:
+        return ["geneformer", "scgpt", "cellfm", "uce", "scvi"]
+    out = []
+    for model in models:
+        key = model.lower()
+        if key in _REGISTRY and key not in out:
+            out.append(key)
+    return out
+
+
+def _benchmark_required_fields(task: str, primary_metric: str, require_baseline: bool = True) -> List[str]:
+    required = [
+        "schema",
+        "task",
+        "model",
+        "dataset.anndata_sha256",
+        "dataset.ground_truth_hash",
+        "dataset.label_source",
+        "dataset.split_hash",
+        "dataset.split_strategy",
+        "run.seed",
+        f"metrics.{primary_metric}.value",
+        f"metrics.{primary_metric}.ci_low",
+        f"metrics.{primary_metric}.ci_high",
+        f"metrics.{primary_metric}.n_bootstraps",
+        "audits.no_train_test_leakage",
+        "audits.class_balance_report",
+        "provenance.embedding_provenance_hash",
+    ]
+    required.extend(_BENCHMARK_TASKS.get(task, {}).get("must_have", []))
+    if require_baseline:
+        required.append("baseline.name")
+    return required
+
+
+@server.tool(
+    "scfm_benchmark_plan",
+    "Create a benchmark orchestration contract for single-cell foundation models: one isolated subtask per model, "
+    "a SubagentStop-style scientific verification hook, and an optional goal loop for alpha sweeps in rare-cell "
+    "detection. This produces a plan/contract only; it does not run the benchmark.",
+    {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string", "enum": ["rare_cell_detection", "cell_type_annotation", "reference_mapping", "embedding_quality"], "default": "rare_cell_detection"},
+            "models": {"type": "array", "items": {"type": "string", "enum": ["geneformer", "scgpt", "cellfm", "uce", "scvi", "totalvi", "multivi"]}},
+            "rare_population": {"type": "string", "default": "KRT17+ epithelial state"},
+            "primary_metric": {"type": "string", "default": "auprc"},
+            "target_metric_value": {"type": "number"},
+            "target_basis": {"type": "string", "enum": ["ci_lower", "point_estimate"], "default": "ci_lower"},
+            "alpha_grid": {"type": "array", "items": {"type": "number"}},
+            "seeds": {"type": "array", "items": {"type": "integer"}},
+            "split_strategy": {"type": "string", "enum": ["donor_stratified", "sample_stratified", "cell_stratified", "leave_one_donor_out"], "default": "donor_stratified"},
+            "label_source": {"type": "string", "enum": ["gmm_marker_threshold", "manual_annotation", "celltype_reference", "spatial_marker_score"], "default": "gmm_marker_threshold"},
+            "max_iterations": {"type": "integer", "default": 5},
+        },
+    },
+)
+def scfm_benchmark_plan(
+    task: str = "rare_cell_detection",
+    models: Optional[List[str]] = None,
+    rare_population: str = "KRT17+ epithelial state",
+    primary_metric: Optional[str] = None,
+    target_metric_value: Optional[float] = None,
+    target_basis: str = "ci_lower",
+    alpha_grid: Optional[List[float]] = None,
+    seeds: Optional[List[int]] = None,
+    split_strategy: str = "donor_stratified",
+    label_source: str = "gmm_marker_threshold",
+    max_iterations: int = 5,
+):
+    task = task if task in _BENCHMARK_TASKS else "rare_cell_detection"
+    metric = primary_metric or _BENCHMARK_TASKS[task]["default_metric"]
+    chosen_models = _default_benchmark_models(models)
+    seeds = seeds or [0, 1, 2]
+    alpha_grid = alpha_grid or ([0.1, 0.25, 0.5, 1.0, 2.0, 4.0] if task == "rare_cell_detection" else [])
+    max_iterations = max(1, max_iterations)
+    params = {
+        "task": task,
+        "models": chosen_models,
+        "rare_population": rare_population,
+        "primary_metric": metric,
+        "target_metric_value": target_metric_value,
+        "target_basis": target_basis,
+        "alpha_grid": alpha_grid,
+        "seeds": seeds,
+        "split_strategy": split_strategy,
+        "label_source": label_source,
+        "max_iterations": max_iterations,
+    }
+    plan_hash = prov.content_hash({"tool": "scfm_benchmark_plan", "params": params})
+    require_baseline = any(m in _FOUNDATION for m in chosen_models)
+    required_fields = _benchmark_required_fields(task, metric, require_baseline=require_baseline)
+    model_jobs = []
+    for model in chosen_models:
+        category = _REGISTRY[model]["category"]
+        model_required_fields = _benchmark_required_fields(
+            task, metric, require_baseline=category == "foundation-model"
+        )
+        model_jobs.append({
+            "subagent_name": f"benchmark-{model}",
+            "model": model,
+            "category": category,
+            "allowed_inputs": [
+                "filled embedding provenance record",
+                "predeclared split file/hash",
+                "ground-truth label table/hash",
+                "frozen metric script/hash",
+            ],
+            "required_outputs": model_required_fields,
+            "compare_against": "scvi/domain baseline" if category == "foundation-model" else "foundation-model panel",
+            "stop_condition": f"return only a {BENCHMARK_RESULT_SCHEMA} result that passes scfm_benchmark_verify",
+        })
+    return {
+        "plan_hash": plan_hash,
+        "artifact_type": "benchmark-orchestration-contract",
+        "runnable": False,
+        "params": params,
+        "subagent_boundaries": {
+            "one_subagent_per_model": True,
+            "isolation_rule": "Each model owns its embedding/provenance/metrics context and returns only the benchmark-result object.",
+            "aggregation_rule": "The lead agent aggregates only verified benchmark-result objects; raw logs stay out of the lead context.",
+        },
+        "model_jobs": model_jobs,
+        "hooks": [
+            {
+                "event": "PostToolUse",
+                "tool_boundary": "AnnData load / preprocessing recipe",
+                "gate": "run standard QC, fingerprint, and true content-hash checks before any benchmark job starts",
+            },
+            {
+                "event": "SubagentStop",
+                "tool": "scfm_benchmark_verify",
+                "gate": "reject benchmark results missing CI, split hash, seed, leakage audit, ground-truth hash, or required baseline",
+            },
+            {
+                "event": "Stop",
+                "gate": "numbers written to figures/manuscript must match verified benchmark result hashes",
+            },
+        ],
+        "verifier_contract": {
+            "tool": "scfm_benchmark_verify",
+            "result_schema": BENCHMARK_RESULT_SCHEMA,
+            "required_fields": required_fields,
+            "pass_conditions": [
+                f"{metric} has value plus bootstrap CI with enough resamples",
+                "train/test split is hashed and leakage audit is true",
+                "ground truth/label source is hashed and generated before model predictions",
+                "seed is fixed and recorded",
+                "foundation-model results include a domain baseline comparison",
+            ],
+        },
+        "goal_loop": {
+            "enabled": target_metric_value is not None,
+            "stop_condition": (
+                f"valid {metric} {target_basis} >= {target_metric_value}"
+                if target_metric_value is not None else "valid result object passes the verifier"
+            ),
+            "retry_order": [
+                "try next alpha from alpha_grid" if task == "rare_cell_detection" else "try next predeclared hyperparameter setting",
+                "try predeclared class-imbalance strategy",
+                "stop at max_iterations; do not tune on the held-out test set",
+            ],
+            "max_iterations": max_iterations,
+            "alpha_grid": alpha_grid,
+        },
+        "scientific_notes": _BENCHMARK_TASKS[task]["notes"],
+    }
+
+
+def _path_get(obj: Dict[str, Any], path: str) -> Any:
+    cur: Any = obj
+    for part in path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _as_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_payload(result: Dict[str, Any], metric: str) -> Dict[str, Any]:
+    payload = _path_get(result, f"metrics.{metric}")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ci_bounds(metric_obj: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+    low = _as_float(metric_obj.get("ci_low", metric_obj.get("lower")))
+    high = _as_float(metric_obj.get("ci_high", metric_obj.get("upper")))
+    ci = metric_obj.get("ci")
+    if isinstance(ci, list) and len(ci) >= 2:
+        low = low if low is not None else _as_float(ci[0])
+        high = high if high is not None else _as_float(ci[1])
+    return low, high
+
+
+def _model_requires_baseline(result: Dict[str, Any], require_baseline: bool) -> bool:
+    if not require_baseline:
+        return False
+    model = str(result.get("model", "")).lower()
+    return model in _FOUNDATION
+
+
+def _baseline_present(result: Dict[str, Any], metric: str) -> bool:
+    baseline = result.get("baseline")
+    if not isinstance(baseline, dict):
+        return False
+    if baseline.get("name"):
+        if _path_get(baseline, f"metrics.{metric}.value") is not None:
+            return True
+        if _path_get(baseline, f"{metric}.value") is not None:
+            return True
+        if baseline.get(metric) is not None:
+            return True
+    return False
+
+
+def _benchmark_next_actions(
+    missing_fields: List[str],
+    failures: List[str],
+    target_failure: Optional[str],
+    task: str,
+) -> List[str]:
+    actions: List[str] = []
+    if missing_fields:
+        actions.append("Return to the benchmark subagent and fill missing verifier fields before aggregation.")
+    if any("leakage" in f.lower() or "split" in f.lower() for f in failures):
+        actions.append("Freeze a donor/sample-level split, hash it, and rerun metrics without touching the test labels.")
+    if any("bootstrap" in f.lower() or "CI" in f for f in failures):
+        actions.append("Recompute the primary metric with a bootstrap CI and record n_bootstraps.")
+    if any("baseline" in f.lower() for f in failures):
+        actions.append("Run or attach the scVI/totalVI/MultiVI domain baseline before claiming foundation-model lift.")
+    if target_failure:
+        if task == "rare_cell_detection":
+            actions.append("Try the next predeclared alpha or class-imbalance strategy, then rerun on the frozen split.")
+        else:
+            actions.append("Try the next predeclared setting; do not tune on the held-out test set.")
+    if not actions:
+        actions.append("No retry action needed.")
+    return actions
+
+
+@server.tool(
+    "scfm_benchmark_verify",
+    "Verify a single-cell foundation-model benchmark result before it can flow upstream. Checks primary metric "
+    "value + bootstrap CI, fixed seed, hashed split and ground truth, leakage audit, class-balance audit, provenance, "
+    "and baseline comparison for foundation models. Returns a SubagentStop-style pass/retry/fail decision.",
+    {
+        "type": "object",
+        "properties": {
+            "result": {"type": "object", "description": "A bio-scfm/benchmark-result/1 object returned by a benchmark subagent."},
+            "task": {"type": "string", "enum": ["rare_cell_detection", "cell_type_annotation", "reference_mapping", "embedding_quality"]},
+            "primary_metric": {"type": "string", "default": "auprc"},
+            "target_metric_value": {"type": "number"},
+            "target_basis": {"type": "string", "enum": ["ci_lower", "point_estimate"], "default": "ci_lower"},
+            "min_ci_bootstraps": {"type": "integer", "default": 200},
+            "max_ci_width": {"type": "number"},
+            "require_baseline": {"type": "boolean", "default": True},
+            "attempts_used": {"type": "integer", "default": 1},
+            "max_attempts": {"type": "integer", "default": 5},
+        },
+        "required": ["result"],
+    },
+)
+def scfm_benchmark_verify(
+    result: Dict[str, Any],
+    task: Optional[str] = None,
+    primary_metric: str = "auprc",
+    target_metric_value: Optional[float] = None,
+    target_basis: str = "ci_lower",
+    min_ci_bootstraps: int = 200,
+    max_ci_width: Optional[float] = None,
+    require_baseline: bool = True,
+    attempts_used: int = 1,
+    max_attempts: int = 5,
+):
+    result = dict(result or {})
+    task = task or str(result.get("task") or "rare_cell_detection")
+    if task not in _BENCHMARK_TASKS:
+        task = "rare_cell_detection"
+    required = _benchmark_required_fields(task, primary_metric, require_baseline=_model_requires_baseline(result, require_baseline))
+    missing = prov.required_fields_missing(result, required)
+    failures: List[str] = []
+    warnings: List[str] = []
+
+    if result.get("schema") != BENCHMARK_RESULT_SCHEMA:
+        failures.append(f"schema must be {BENCHMARK_RESULT_SCHEMA}")
+
+    metric_obj = _metric_payload(result, primary_metric)
+    value = _as_float(metric_obj.get("value"))
+    ci_low, ci_high = _ci_bounds(metric_obj)
+    n_boot = _as_int(metric_obj.get("n_bootstraps"))
+    if value is not None and not (0 <= value <= 1):
+        failures.append(f"{primary_metric}.value must be within [0, 1]")
+    if ci_low is not None and ci_high is not None:
+        if not (0 <= ci_low <= ci_high <= 1):
+            failures.append(f"{primary_metric} CI must satisfy 0 <= ci_low <= ci_high <= 1")
+        if max_ci_width is not None and (ci_high - ci_low) > max_ci_width:
+            failures.append(f"{primary_metric} CI width {ci_high - ci_low:.4f} exceeds max_ci_width {max_ci_width}")
+    if n_boot is not None and n_boot < min_ci_bootstraps:
+        failures.append(f"{primary_metric}.n_bootstraps={n_boot} is below min_ci_bootstraps={min_ci_bootstraps}")
+
+    audits = result.get("audits") if isinstance(result.get("audits"), dict) else {}
+    if audits.get("no_train_test_leakage") is not True:
+        failures.append("no_train_test_leakage audit must be true")
+    if not audits.get("class_balance_report"):
+        failures.append("class_balance_report is required for rare/imbalanced single-cell tasks")
+    if task == "rare_cell_detection":
+        label_source = str(_path_get(result, "dataset.label_source") or "")
+        if label_source != "gmm_marker_threshold":
+            warnings.append("rare-cell benchmark is strongest with label_source='gmm_marker_threshold'; document why another label source was used")
+        if audits.get("ground_truth_threshold_blinded") is not True:
+            failures.append("ground_truth_threshold_blinded audit must be true for rare-cell detection")
+
+    if _model_requires_baseline(result, require_baseline) and not _baseline_present(result, primary_metric):
+        failures.append("foundation-model benchmark requires a domain baseline metric (e.g. scVI) in result.baseline")
+
+    target_failure = None
+    target_met = True
+    if target_metric_value is not None:
+        basis_value = value if target_basis == "point_estimate" else ci_low
+        if basis_value is None:
+            target_met = False
+            target_failure = f"cannot evaluate target because {target_basis} is missing"
+        elif basis_value < target_metric_value:
+            target_met = False
+            target_failure = f"{primary_metric} {target_basis} {basis_value:.4f} < target {target_metric_value:.4f}"
+
+    valid = not missing and not failures
+    goal_met = valid and target_met
+    if goal_met:
+        decision = "pass"
+    elif attempts_used < max(1, max_attempts):
+        decision = "retry"
+    else:
+        decision = "fail"
+    result_hash = prov.content_hash({"benchmark_result": result})
+    return {
+        "hook_decision": decision,
+        "goal_met": goal_met,
+        "valid": valid,
+        "result_hash": result_hash,
+        "schema_expected": BENCHMARK_RESULT_SCHEMA,
+        "missing_fields": missing,
+        "failures": failures + ([target_failure] if target_failure else []),
+        "warnings": warnings,
+        "metric_checked": {
+            "name": primary_metric,
+            "value": value,
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+            "n_bootstraps": n_boot,
+            "target_metric_value": target_metric_value,
+            "target_basis": target_basis,
+        },
+        "retry_actions": _benchmark_next_actions(missing, failures, target_failure, task) if decision == "retry" else [],
+        "note": "pass = 可进入下游汇总；retry = 返回该模型 benchmark subagent 补齐/重跑；fail = 预算耗尽或无效结果需报告为未达标。",
+    }
 
 
 @server.tool(

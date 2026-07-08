@@ -29,6 +29,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::config;
@@ -46,11 +47,15 @@ pub struct PackDef {
     #[serde(default)]
     pub version: String,
     #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
     pub requires_env: Vec<String>,
     #[serde(default)]
     pub optional_env: Vec<OptionalEnv>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub requires_tools: Vec<ToolRequirement>,
     #[serde(default)]
     pub servers: Vec<ServerDef>,
     #[serde(default)]
@@ -60,13 +65,87 @@ pub struct PackDef {
     pub task_tags: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+impl PackDef {
+    pub fn dependency_ids(&self) -> Vec<String> {
+        let mut out: BTreeSet<String> = self.dependencies.iter().cloned().collect();
+        out.extend(self.depends_on.iter().cloned());
+        out.into_iter().collect()
+    }
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
 pub struct OptionalEnv {
     pub name: String,
     #[serde(default)]
     pub label: String,
     #[serde(default)]
     pub url: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for OptionalEnv {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OptionalEnvVisitor;
+        impl<'de> Visitor<'de> for OptionalEnvVisitor {
+            type Value = OptionalEnv;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string env var name or {name,label,url}")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(OptionalEnv {
+                    name: value.to_string(),
+                    label: String::new(),
+                    url: None,
+                })
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut out = OptionalEnv::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => out.name = map.next_value()?,
+                        "label" => out.label = map.next_value()?,
+                        "url" => out.url = map.next_value()?,
+                        _ => {
+                            let _: serde_json::Value = map.next_value()?;
+                        }
+                    }
+                }
+                if out.name.is_empty() {
+                    return Err(de::Error::missing_field("name"));
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_any(OptionalEnvVisitor)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ToolRequirement {
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default = "default_required_tool")]
+    pub required: bool,
+    #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub install_hint: String,
+}
+
+fn default_required_tool() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -85,6 +164,44 @@ pub struct ServerDef {
 pub struct SkillDef {
     pub id: String,
     pub src: String,
+}
+
+fn validate_pack_def(pack: &PackDef, dir_name: &str, asset_root: &Path) -> Vec<String> {
+    let mut errors = Vec::new();
+    if pack.id != dir_name {
+        errors.push(format!("id '{}' does not match directory '{}'", pack.id, dir_name));
+    }
+    if pack.version.trim().is_empty() {
+        errors.push("missing required version".to_string());
+    }
+    if !pack.depends_on.is_empty() && !pack.dependencies.is_empty() {
+        let old: BTreeSet<_> = pack.depends_on.iter().collect();
+        let new: BTreeSet<_> = pack.dependencies.iter().collect();
+        if old != new {
+            errors.push("dependencies and deprecated depends_on disagree".to_string());
+        }
+    }
+    for dep in pack.dependency_ids() {
+        if dep == pack.id.as_str() {
+            errors.push("pack cannot depend on itself".to_string());
+        }
+    }
+    for srv in &pack.servers {
+        if !srv.name.starts_with("bio-") {
+            errors.push(format!("server '{}' must start with bio-", srv.name));
+        }
+        let script = asset_root.join(&srv.script);
+        if !script.is_file() {
+            errors.push(format!("server script missing: {}", srv.script));
+        }
+    }
+    for sk in &pack.skills {
+        let src = asset_root.join(&sk.src);
+        if !src.is_dir() {
+            errors.push(format!("skill source missing: {}", sk.src));
+        }
+    }
+    errors
 }
 
 /// 扫描资源根下 `packs/*/pack.json`。跳过下划线开头的目录（`_lib`）。
@@ -108,7 +225,14 @@ pub fn list_packs(asset_root: &Path) -> Vec<PackDef> {
             .ok()
             .and_then(|b| serde_json::from_slice::<PackDef>(&b).ok())
         {
-            Some(p) => out.push(p),
+            Some(p) => {
+                let errors = validate_pack_def(&p, name.as_ref(), asset_root);
+                if errors.is_empty() {
+                    out.push(p);
+                } else {
+                    eprintln!("[packs] 跳过：{} schema 校验失败：{}", pj.display(), errors.join("; "));
+                }
+            }
             None => eprintln!("[packs] 跳过：{} 无法解析", pj.display()),
         }
     }
@@ -116,52 +240,101 @@ pub fn list_packs(asset_root: &Path) -> Vec<PackDef> {
     out
 }
 
-fn collect_pack_and_deps(
-    id: &str,
-    by_id: &BTreeMap<String, &PackDef>,
-    stack: &mut Vec<String>,
-    active: &mut BTreeSet<String>,
-) -> Result<(), String> {
-    if active.contains(id) {
-        return Ok(());
-    }
-    if let Some(pos) = stack.iter().position(|x| x == id) {
-        let mut cycle = stack[pos..].to_vec();
-        cycle.push(id.to_string());
-        return Err(format!("pack dependency cycle detected: {}", cycle.join(" -> ")));
-    }
-    let pack = by_id
-        .get(id)
-        .ok_or_else(|| format!("enabled pack or dependency '{id}' is not installed"))?;
-
-    stack.push(id.to_string());
-    for dep in &pack.depends_on {
-        collect_pack_and_deps(dep, by_id, stack, active)?;
-    }
-    stack.pop();
-    active.insert(id.to_string());
-    Ok(())
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct PackDependencyStatus {
+    pub order: Vec<String>,
+    pub auto_enabled: Vec<String>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
 }
 
-fn resolve_enabled_pack_ids(
-    all: &[PackDef],
-    enabled: &BTreeMap<String, bool>,
-) -> Result<(BTreeSet<String>, Vec<String>), String> {
-    let by_id: BTreeMap<String, &PackDef> =
-        all.iter().map(|p| (p.id.clone(), p)).collect();
+fn visit_pack<'a>(
+    id: &str,
+    by_id: &BTreeMap<String, &'a PackDef>,
+    visiting: &mut Vec<String>,
+    visited: &mut BTreeSet<String>,
+    order: &mut Vec<&'a PackDef>,
+    errors: &mut Vec<String>,
+) {
+    if visited.contains(id) {
+        return;
+    }
+    if let Some(pos) = visiting.iter().position(|x| x == id) {
+        let mut cycle = visiting[pos..].to_vec();
+        cycle.push(id.to_string());
+        errors.push(format!("pack dependency cycle detected: {}", cycle.join(" -> ")));
+        return;
+    }
+    let Some(pack) = by_id.get(id).copied() else {
+        errors.push(format!("pack '{id}' is not installed"));
+        return;
+    };
+
+    visiting.push(id.to_string());
+    for dep in pack.dependency_ids() {
+        if !by_id.contains_key(&dep) {
+            errors.push(format!("pack '{}' depends on missing pack '{}'", pack.id, dep));
+            continue;
+        }
+        visit_pack(&dep, by_id, visiting, visited, order, errors);
+    }
+    visiting.pop();
+    if visited.insert(id.to_string()) {
+        order.push(pack);
+    }
+}
+
+pub fn resolve_pack_order<'a>(
+    packs: &'a [PackDef],
+    enabled: &[String],
+) -> Result<Vec<&'a PackDef>, Vec<String>> {
+    let by_id: BTreeMap<String, &PackDef> = packs.iter().map(|p| (p.id.clone(), p)).collect();
+    let mut visited = BTreeSet::new();
+    let mut order = Vec::new();
+    let mut errors = Vec::new();
+    let explicit: BTreeSet<String> = enabled.iter().cloned().collect();
+    for id in &explicit {
+        visit_pack(id, &by_id, &mut Vec::new(), &mut visited, &mut order, &mut errors);
+    }
+    if errors.is_empty() {
+        Ok(order)
+    } else {
+        errors.sort();
+        errors.dedup();
+        Err(errors)
+    }
+}
+
+pub fn dependency_status(all: &[PackDef], enabled: &BTreeMap<String, bool>) -> PackDependencyStatus {
     let explicit: BTreeSet<String> = enabled
         .iter()
         .filter_map(|(id, on)| if *on { Some(id.clone()) } else { None })
         .collect();
-    let mut active = BTreeSet::new();
-    for id in &explicit {
-        collect_pack_and_deps(id, &by_id, &mut Vec::new(), &mut active)?;
+    let enabled_ids: Vec<String> = explicit.iter().cloned().collect();
+    match resolve_pack_order(all, &enabled_ids) {
+        Ok(order) => {
+            let order_ids: Vec<String> = order.iter().map(|p| p.id.clone()).collect();
+            let auto_enabled: Vec<String> = order_ids
+                .iter()
+                .filter(|id| !explicit.contains(*id))
+                .cloned()
+                .collect();
+            let warnings = auto_enabled
+                .iter()
+                .map(|id| format!("{id} auto-enabled because a selected pack depends on it"))
+                .collect();
+            PackDependencyStatus {
+                order: order_ids,
+                auto_enabled,
+                warnings,
+                errors: Vec::new(),
+            }
+        }
+        Err(errors) => PackDependencyStatus {
+            errors,
+            ..PackDependencyStatus::default()
+        },
     }
-    let warnings = active
-        .difference(&explicit)
-        .map(|id| format!("{id} auto-enabled because a selected pack depends on it"))
-        .collect();
-    Ok((active, warnings))
 }
 
 fn python3() -> Result<String, String> {
@@ -318,7 +491,12 @@ pub fn apply(
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let all = list_packs(asset_root);
     let py = python3()?;
-    let (active_pack_ids, dep_warnings) = resolve_enabled_pack_ids(&all, enabled)?;
+    let dep_status = dependency_status(&all, enabled);
+    if !dep_status.errors.is_empty() {
+        return Err(dep_status.errors.join("; "));
+    }
+    let active_pack_ids: BTreeSet<String> = dep_status.order.iter().cloned().collect();
+    let by_id: BTreeMap<String, &PackDef> = all.iter().map(|p| (p.id.clone(), p)).collect();
 
     // 保留【非本项目管理的】server（用户可能自加了别的 MCP）。归属判断：
     //   1) `bio-` 前缀 → 我们的
@@ -348,11 +526,18 @@ pub fn apply(
     }
 
     let mut applied: Vec<String> = Vec::new();
-    let mut warnings = dep_warnings;
+    let mut warnings = dep_status.warnings;
 
     for pack in &all {
-        let on = active_pack_ids.contains(&pack.id);
-        if on {
+        if !active_pack_ids.contains(&pack.id) {
+            for sk in &pack.skills {
+                let _ = uninstall_skill(sandbox_data_dir, sk);
+            }
+        }
+    }
+
+    for pack_id in &dep_status.order {
+        if let Some(pack) = by_id.get(pack_id) {
             let mut missing = Vec::new();
             for k in &pack.requires_env {
                 if pack_env.get(k).map(|v| v.is_empty()).unwrap_or(true) {
@@ -387,10 +572,6 @@ pub fn apply(
                 }
             }
             applied.push(pack.id.clone());
-        } else {
-            for sk in &pack.skills {
-                let _ = uninstall_skill(sandbox_data_dir, sk);
-            }
         }
     }
 
@@ -443,3 +624,99 @@ pub const BIOMED_TASKS: &[(&str, &str, &str)] = &[
     ("evidence-check",   "引用 / 证据审计",      "PMID/DOI/NCT 校验；JSON 稳定性优先"),
     ("phi-sensitive",    "含 PHI 的临床数据",    "受 sensitive_mode 门控，只允许本地端点"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pack(id: &str, deps: &[&str]) -> PackDef {
+        PackDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            version: String::new(),
+            dependencies: deps.iter().map(|d| d.to_string()).collect(),
+            requires_env: Vec::new(),
+            optional_env: Vec::new(),
+            depends_on: Vec::new(),
+            requires_tools: Vec::new(),
+            servers: Vec::new(),
+            skills: Vec::new(),
+            task_tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_pack_order_places_dependencies_first() {
+        let packs = vec![
+            pack("bio-sc-downstream", &["bio-singlecell"]),
+            pack("bio-singlecell", &[]),
+        ];
+        let order = resolve_pack_order(&packs, &["bio-sc-downstream".to_string()]).unwrap();
+        let ids: Vec<&str> = order.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["bio-singlecell", "bio-sc-downstream"]);
+    }
+
+    #[test]
+    fn dependency_status_reports_auto_enabled_dependencies() {
+        let packs = vec![
+            pack("bio-sc-downstream", &["bio-singlecell"]),
+            pack("bio-singlecell", &[]),
+        ];
+        let enabled = BTreeMap::from([("bio-sc-downstream".to_string(), true)]);
+        let status = dependency_status(&packs, &enabled);
+        assert_eq!(status.order, vec!["bio-singlecell", "bio-sc-downstream"]);
+        assert_eq!(status.auto_enabled, vec!["bio-singlecell"]);
+        assert!(status.warnings[0].contains("bio-singlecell auto-enabled"));
+        assert!(status.errors.is_empty());
+    }
+
+    #[test]
+    fn resolve_pack_order_reports_missing_dependency() {
+        let packs = vec![pack("bio-sc-downstream", &["bio-singlecell"])];
+        let errors = resolve_pack_order(&packs, &["bio-sc-downstream".to_string()]).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("depends on missing pack 'bio-singlecell'")));
+    }
+
+    #[test]
+    fn resolve_pack_order_reports_cycles() {
+        let packs = vec![pack("a", &["b"]), pack("b", &["a"])];
+        let errors = resolve_pack_order(&packs, &["a".to_string()]).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("a -> b -> a")));
+    }
+
+    #[test]
+    fn pack_manifest_accepts_new_dependencies_field() {
+        let raw = r#"{
+            "id":"bio-child",
+            "name":"child",
+            "description":"child pack",
+            "version":"0.1.0",
+            "dependencies":["bio-parent"],
+            "requires_tools":[{"name":"python3"}],
+            "servers":[]
+        }"#;
+        let p: PackDef = serde_json::from_str(raw).unwrap();
+        assert_eq!(p.dependency_ids(), vec!["bio-parent".to_string()]);
+        assert_eq!(p.requires_tools[0].name, "python3");
+    }
+
+    #[test]
+    fn optional_env_accepts_legacy_string_entries() {
+        let raw = r#"{
+            "id":"bio-env",
+            "name":"env",
+            "description":"env pack",
+            "version":"0.1.0",
+            "dependencies":[],
+            "requires_tools":[],
+            "optional_env":["NCBI_API_KEY", {"name":"NCBI_EMAIL","label":"Email"}],
+            "servers":[]
+        }"#;
+        let p: PackDef = serde_json::from_str(raw).unwrap();
+        assert_eq!(p.optional_env[0].name, "NCBI_API_KEY");
+        assert_eq!(p.optional_env[1].label, "Email");
+    }
+}

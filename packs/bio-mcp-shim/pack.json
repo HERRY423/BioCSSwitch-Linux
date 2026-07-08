@@ -3,6 +3,10 @@
   "name": "远程 MCP 本地替身层",
   "description": "Anthropic 托管的远程 MCP（pubmed / clinical-trials / chembl / biorxiv 位于 *.mcp.claude.com）在虚拟登录下被代理 fast-fail。这个 pack 用**本地 MCP**假冒它们，用同名（pubmed / clinical-trials / chembl / biorxiv）挂进沙箱，让 Science 的工具列表看起来仍然有这些远程 MCP，实际流量走本地 API + 用户填的 key。",
   "version": "0.1.0",
+  "dependencies": ["bio-lit", "bio-trials", "bio-drug"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP shim servers"}
+  ],
   "requires_env": [],
   "optional_env": [
     {"name": "NCBI_API_KEY",     "label": "NCBI API Key（PubMed 提高配额）"},

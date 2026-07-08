@@ -77,6 +77,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .foot2{border-top:none;padding-top:0;padding-bottom:11px}
 .link{color:var(--accent);cursor:pointer}
 .link:hover{text-decoration:underline}
+.linkbtn.update-available{color:var(--red);font-weight:700}
 .hint{font-size:10.5px;color:var(--sub);margin-top:6px;line-height:1.5}
 .adv summary{font-size:11px;color:var(--sub);cursor:pointer;list-style:none;letter-spacing:.02em}
 .adv summary::-webkit-details-marker{display:none}

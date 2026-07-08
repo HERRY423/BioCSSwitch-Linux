@@ -12,13 +12,13 @@
 
 CSSwitch 是一个给 Claude Science 使用的本地模型切换器。它把 Science 的推理请求接到你自己的第三方模型 API 上，让没有 Claude 订阅的用户也能在 Science 里使用 DeepSeek、通义千问、Kimi、MiniMax、GLM、OpenRouter、中转站或自定义兼容端点。
 
-BioCSSwitch 是面向生物医学研究场景的 CSSwitch 分支。它基于上游 CSSwitch v0.3.2 的多 provider / 真实模型名显示能力，额外加入本地 biomedical MCP/Skill packs、证据审计、隐私红队、单细胞分析与 scFM 工作流。
+BioCSSwitch 是面向生物医学研究场景的 CSSwitch 分支。它基于上游 CSSwitch v0.3.6 的多 provider / 真实模型名显示能力，额外加入本地 biomedical MCP/Skill packs、证据审计、隐私红队、单细胞分析、空间组学、scFM 与生物医学 ML 工作流。
 
 它让你不必订阅 Claude，也能在 Science 中使用自己的第三方模型。填入 API Key，选择服务商，剩下的交给 BioCSSwitch。简单来说，它之于 Claude Science，就像 CC Switch 之于 Claude Code；但默认工具包更偏向文献、临床试验、药物靶点、组学和单细胞研究。
 
 > 当前版本主要支持 macOS Apple Silicon。首次打开未公证的 `.dmg` 应用时，macOS 可能需要你右键选择「打开」。
 
-[下载最新版](../../releases/latest) · [更新日志](./CHANGELOG.md) · [报告问题](https://github.com/SuperJJ007/CSSwitch/issues/new?template=bug_report.yml) · [功能建议](https://github.com/SuperJJ007/CSSwitch/issues/new?template=feature_request.yml)
+[下载最新版](../../releases/latest) · [更新日志](./CHANGELOG.md) · [报告问题](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml) · [功能建议](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)
 
 BioCSSwitch 会把这个地址指向本地代理。代理收到请求后，会移除 Science 附带的 OAuth 信息，换成你的第三方 API Key；如果服务商使用不同的接口格式，代理还会负责协议转换，最后把请求发给你选择的模型。
 
@@ -65,6 +65,7 @@ BioCSSwitch 继承自 [SuperJJ007/CSSwitch](https://github.com/SuperJJ007/CSSwit
 - **启用前会校验 Key**：把一条配置「设为当前」或修改正在生效的连接时，BioCSSwitch 会先发一条最小请求验证 Key，通不过就自动回退、不会谎报已生效。（新建配置只保存、不联网，验证留到启用那一步。）
 - **内置生物医学工具包**：覆盖 PubMed / Europe PMC / Crossref / bioRxiv / ClinicalTrials.gov / ChEMBL / Open Targets / HGNC / MeSH / UniProt / Ensembl 等本地 MCP 与 Skill 工作流，并提供证据审计、GRADE/SoF、PHI 脱敏、隐私红队和 provider benchmark。
 - **单细胞与 scFM 工作流**：提供 `bio-singlecell`、`bio-scfm`、`bio-sc-downstream`、`bio-sc-atlas` 与 `sc-analysis`，生成 QC、doublet、batch、cell type annotation、Geneformer/scGPT/CellFM/UCE embedding skeleton、DEG、trajectory、cell-cell communication 和 CELLxGENE 下载配方。
+- **机器学习突破板块**：提供 `bio-ml` 与 `biomedical-ml-strategy`，把多模态基础模型、虚拟细胞/扰动预测、AI 药物发现、联邦学习、临床 ML 验证门和自驱实验室做成可复现 recipe、不可误跑的 skeleton、provenance 与 claim-scope gate。
 - **方便检查更新**：可以从面板直接打开 GitHub Releases，查看和下载新版本。
 
 ### 与真实账号隔离
@@ -176,6 +177,7 @@ cd desktop/src-tauri
 cargo test
 
 cd ../..
+python3 -m pip install -e ".[dev]"
 python3 -m pytest test
 ```
 

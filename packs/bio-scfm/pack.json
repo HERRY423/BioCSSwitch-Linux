@@ -1,8 +1,15 @@
 {
   "id": "bio-scfm",
   "name": "单细胞基础模型适配层（Geneformer / scGPT）",
-  "description": "把 Geneformer / scGPT / CellFM / UCE 当计算工具（表达谱→embedding 的编码器）而非聊天模型。铁律：任何 embedding 或 fine-tuning 必须附 provenance。适配层产出可复现运行 skeleton、fine-tuning skeleton、embedding 质量评估配方、CellFM/UCE 专用预处理配方与 provenance 骨架；模型在用户机器上跑。",
+  "description": "把 Geneformer / scGPT / CellFM / UCE 当计算工具（表达谱→embedding 的编码器）而非聊天模型。铁律：任何 embedding、fine-tuning 或 benchmark 结论必须附 provenance 与科学验证 gate。适配层产出可复现运行 skeleton、fine-tuning skeleton、embedding 质量评估配方、benchmark subagent/goal-loop 合约、CellFM/UCE 专用预处理配方与 provenance 骨架；模型在用户机器上跑。",
   "version": "0.2.0",
+  "dependencies": ["bio-singlecell"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"},
+    {"name": "Geneformer", "kind": "python/model", "required": false, "purpose": "Generated scFM embedding adapters"},
+    {"name": "scGPT", "kind": "python/model", "required": false, "purpose": "Generated scFM embedding adapters"},
+    {"name": "scvi-tools", "kind": "python", "required": false, "purpose": "Baseline embeddings and quality metrics"}
+  ],
   "requires_env": [],
   "optional_env": [],
   "depends_on": ["bio-singlecell"],

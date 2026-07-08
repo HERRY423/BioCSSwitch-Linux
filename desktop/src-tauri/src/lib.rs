@@ -18,43 +18,24 @@ mod netcanon;
 mod oauth_forge;
 mod packs;
 mod proc;
+#[allow(dead_code)]
+mod proxy;
 mod scratch;
+mod state;
 mod templates;
 mod verification;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
+use state::{key_fingerprint, kill_child, lock, AppState};
 use tauri::{Manager, State};
 
 const SCIENCE_BIN: &str = "/Applications/Claude Science.app/Contents/Resources/bin/claude-science";
-
-#[derive(Default)]
-struct AppState {
-    proxy: Option<Child>,
-    proxy_port: u16,
-    secret: String,
-    /// 当前代理进程所用 adapter 名（deepseek | qwen | relay | openai-custom | openai-responses）；用于健康复用判定。
-    provider: String,
-    /// 当前代理进程所用 key 的非加密指纹（仅内存、绝不落盘/打印）。
-    /// 换 key/换上游后指纹变化 → 触发重启，避免复用带旧配置的代理。
-    key_fp: u64,
-    sandbox: Option<Child>,
-    sandbox_port: u16,
-    sandbox_url: Option<String>,
-}
-
-/// key 的非加密指纹（SipHash），只用于判断「配置是否变了」。绝不打印、绝不落盘。
-fn key_fingerprint(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    h.finish()
-}
 
 // ---------- adapter / profile 运行元信息 ----------
 /// adapter → 该 adapter 期望的 key 环境变量名（python 代理侧 PROVIDERS[...]["key_env"]）。
@@ -272,18 +253,6 @@ fn tail_file(path: &Path, max: usize) -> String {
         }
         Err(_) => String::new(),
     }
-}
-
-fn kill_child(slot: &mut Option<Child>) {
-    if let Some(mut c) = slot.take() {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-}
-
-/// 取锁并从 poison 中恢复：某线程持锁时 panic 不应把整个 app 卡死。
-fn lock(m: &Mutex<AppState>) -> std::sync::MutexGuard<'_, AppState> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// 用系统浏览器打开 URL（macOS `open`）。校验退出码：非零视为失败（P2c）。
@@ -1952,10 +1921,119 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+const RELEASE_LATEST_API: &str = "https://api.github.com/repos/HERRY423/BioCSSwitch/releases/latest";
+const RELEASE_LATEST_PAGE: &str = "https://github.com/HERRY423/BioCSSwitch/releases/latest";
+
+fn normalize_version_tag(tag: &str) -> String {
+    tag.trim()
+        .trim_start_matches(|c| c == 'v' || c == 'V')
+        .split(|c| c == '-' || c == '+')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn version_parts(version: &str) -> Vec<u64> {
+    normalize_version_tag(version)
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u64>()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let mut a = version_parts(latest);
+    let mut b = version_parts(current);
+    let n = a.len().max(b.len());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    a > b
+}
+
+fn parse_latest_release_json(body: &str) -> Result<(String, String, Option<String>), String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("GitHub releases/latest JSON 解析失败：{e}"))?;
+    let tag = v
+        .get("tag_name")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .ok_or("GitHub releases/latest 缺少 tag_name")?
+        .to_string();
+    let url = v
+        .get("html_url")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .unwrap_or(RELEASE_LATEST_PAGE)
+        .to_string();
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(|x| x.to_string());
+    Ok((tag, url, name))
+}
+
+fn fetch_latest_release_json() -> Result<String, String> {
+    let out = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            "8",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "User-Agent: BioCSSwitch-update-check",
+            RELEASE_LATEST_API,
+        ])
+        .output()
+        .map_err(|e| format!("无法运行 curl 检查更新：{e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "GitHub releases/latest 请求失败：{}",
+            if err.is_empty() {
+                format!("curl exit {:?}", out.status.code())
+            } else {
+                err
+            }
+        ));
+    }
+    String::from_utf8(out.stdout).map_err(|e| format!("GitHub releases/latest 不是 UTF-8：{e}"))
+}
+
+#[tauri::command]
+fn check_updates() -> Result<serde_json::Value, String> {
+    let current = app_version();
+    let body = fetch_latest_release_json()?;
+    let (latest_tag, release_url, release_name) = parse_latest_release_json(&body)?;
+    let latest_version = normalize_version_tag(&latest_tag);
+    Ok(json!({
+        "ok": true,
+        "current_version": current,
+        "latest_version": latest_version,
+        "latest_tag": latest_tag,
+        "release_name": release_name,
+        "release_url": release_url,
+        "update_available": version_is_newer(&latest_version, &current),
+    }))
+}
+
 /// 打开 GitHub Releases 页（检查更新时用系统浏览器打开，浏览器走用户自己的代理）。
 #[tauri::command]
 fn open_release_page() -> Result<(), String> {
-    open_in_browser("https://github.com/HERRY423/BioCSSwitch/releases/latest")
+    open_in_browser(RELEASE_LATEST_PAGE)
 }
 
 /// 打开「报 bug」页（预填 bug 模板）；用系统浏览器，走用户自己的代理。
@@ -2037,6 +2115,7 @@ fn list_packs(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     for (k, v) in &cfg.pack_env {
         env_masked.insert(k.clone(), serde_json::Value::Bool(!v.is_empty()));
     }
+    let dependency_status = packs::dependency_status(&all, &cfg.enabled_packs);
     let current_upstream = cfg
         .active_profile()
         .map(|p| upstream_host(&templates::adapter_for(&p.template_id), &p.base_url))
@@ -2044,6 +2123,7 @@ fn list_packs(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     Ok(json!({
         "packs": all,
         "enabled": cfg.enabled_packs,
+        "dependency_status": dependency_status,
         "env_set": env_masked,
         "mode": cfg.mode,
         "sensitive_mode": cfg.sensitive_mode,
@@ -2692,6 +2772,7 @@ pub fn run() {
             open_url,
             run_doctor,
             app_version,
+            check_updates,
             open_release_page,
             report_bug,
             open_logs,
@@ -2741,13 +2822,14 @@ mod tests {
         assert_format_supported, build_get_config, build_list_templates, clear_profile_key_inner,
         create_profile_inner, decide_switch, delete_profile_inner, first_http_url,
         health_timeout_reason, is_main_list_model, key_env_for_adapter, key_fingerprint,
-        merge_and_sort_models, nonactive_probe_verdict, parse_host, probe_kind_for,
-        probe_kind_for_model, proxy_args_for, proxy_fingerprint, redact,
+        merge_and_sort_models, nonactive_probe_verdict, normalize_version_tag,
+        parse_host, parse_latest_release_json, probe_kind_for, probe_kind_for_model,
+        proxy_args_for, proxy_fingerprint, redact,
         reject_openai_custom_anthropic_base, relay_missing_base_url, relay_missing_model,
         rollback_status_clause, sandbox_home, settings_change_needs_teardown,
         should_scratch_candidate, should_write_back, skip_scratch_verify,
         update_profile_connection_inner, update_profile_metadata_inner, upstream_host,
-        ConnectionEdit, SwitchOutcome,
+        version_is_newer, ConnectionEdit, SwitchOutcome,
     };
     use crate::config;
 
@@ -2884,6 +2966,32 @@ mod tests {
         );
         assert_eq!(key_env_for_adapter("relay"), "CSSWITCH_RELAY_KEY");
         assert_eq!(key_env_for_adapter("anything-else"), "CSSWITCH_RELAY_KEY");
+    }
+
+    #[test]
+    fn update_version_compare_handles_tags_and_padding() {
+        assert_eq!(normalize_version_tag("v0.3.7"), "0.3.7");
+        assert!(version_is_newer("v0.3.10", "0.3.9"));
+        assert!(version_is_newer("0.4.0-beta.1", "0.3.99"));
+        assert!(!version_is_newer("v0.3.6", "0.3.6"));
+        assert!(!version_is_newer("0.3", "0.3.1"));
+    }
+
+    #[test]
+    fn latest_release_json_parser_reads_tag_and_url() {
+        let body = r#"{
+            "tag_name": "v0.3.7",
+            "name": "BioCSSwitch v0.3.7",
+            "html_url": "https://github.com/HERRY423/BioCSSwitch/releases/tag/v0.3.7"
+        }"#;
+        let (tag, url, name) = parse_latest_release_json(body).unwrap();
+        assert_eq!(tag, "v0.3.7");
+        assert_eq!(
+            url,
+            "https://github.com/HERRY423/BioCSSwitch/releases/tag/v0.3.7"
+        );
+        assert_eq!(name.as_deref(), Some("BioCSSwitch v0.3.7"));
+        assert!(parse_latest_release_json(r#"{"name":"missing tag"}"#).is_err());
     }
 
     #[test]

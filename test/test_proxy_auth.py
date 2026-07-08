@@ -91,8 +91,10 @@ class ProxyAuth(unittest.TestCase):
                      {"model": "claude-opus-4-8", "max_tokens": 10,
                       "messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(s, 200)
-        with open(self.logf) as f:
-            self.assertNotIn(SEC, f.read())
+        with open(self.logf, encoding="utf-8") as f:
+            log_body = f.read()
+        self.assertIn("[INFO]", log_body)
+        self.assertNotIn(SEC, log_body)
 
     def test_unauth_post_closes_connection_no_leak_on_reuse(self):
         # 回归：鉴权失败的 POST 在读走请求体之前就返回 403。若连接保持 keep-alive，

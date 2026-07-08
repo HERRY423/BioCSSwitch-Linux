@@ -87,6 +87,7 @@ npm run tauri build               # 打包 → src-tauri/target/release/bundle/d
 
 ```bash
 bash test/run_all.sh                        # python 单元 + node 伪造器 + bash 脚本三件套（不碰 Science、不联网）
+python3 -m pip install -e ".[dev]"          # 首次运行 pytest 前安装开发依赖；运行时代理仍是纯标准库
 python3 -m pytest test/test_proxy_units.py  # 代理纯逻辑单测（40）
 cd desktop/src-tauri && cargo test          # Rust 后端单测（122）；配 cargo clippy --all-targets -- -D warnings + cargo fmt --check
 node --check desktop/src/main.js            # 前端语法（不加 node 测试依赖，前端逻辑预览手验）

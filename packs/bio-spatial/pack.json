@@ -1,12 +1,18 @@
 {
   "id": "bio-spatial",
   "name": "Spatial transcriptomics recipe layer",
-  "description": "Platform-aware spatial transcriptomics recipes for Visium, Visium HD, Xenium, CosMx, MERFISH and Slide-seq. Generates reproducible preprocessing, deconvolution, rare-cell, spatial foundation-model and IPF/KRT17 validation skeletons with provenance; it does not run heavy spatial analysis inside the MCP process.",
-  "version": "0.1.0",
+  "description": "Platform-aware spatial transcriptomics recipes for Visium, Visium HD, Xenium, CosMx, MERFISH, Slide-seq, Stereo-seq, DBiT-seq, GeoMx and emerging imaging assays. Generates reproducible preprocessing, spatial-domain/SVG, deconvolution, rare-cell, communication, multi-omics, histology-to-ST, 3D atlas, readiness-gate, spatial foundation-model and IPF/KRT17 validation skeletons with provenance; it does not run heavy spatial analysis inside the MCP process.",
+  "version": "0.2.0",
+  "dependencies": ["bio-singlecell", "bio-scfm"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"},
+    {"name": "squidpy", "kind": "python", "required": false, "purpose": "Generated spatial transcriptomics workflows"},
+    {"name": "scanpy", "kind": "python", "required": false, "purpose": "Generated spatial preprocessing workflows"}
+  ],
   "requires_env": [],
   "optional_env": [],
   "depends_on": ["bio-singlecell", "bio-scfm"],
-  "task_tags": ["spatial-transcriptomics", "rare-cell", "ipf", "foundation-models"],
+  "task_tags": ["spatial-transcriptomics", "rare-cell", "ipf", "foundation-models", "spatial-domains", "spatial-multiomics", "histology-to-st", "3d-atlas"],
   "servers": [
     {
       "name": "bio-spatial",

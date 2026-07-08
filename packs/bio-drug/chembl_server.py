@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _lib import http  # noqa: E402
 from _lib.cache import memoize  # noqa: E402
+from _lib.mcp_helpers import mcp_tool, safe_http_get  # noqa: E402
 from _lib.server import MCPServer  # noqa: E402
 
 
@@ -26,7 +27,7 @@ _BASE = "https://www.ebi.ac.uk/chembl/api/data"
 server = MCPServer("bio-drug-chembl", "0.1.0")
 
 
-@server.tool(
+@mcp_tool(
     "chembl_compound_search",
     "Search compounds in ChEMBL by name, synonym, or ChEMBL ID (e.g. 'aspirin', 'CHEMBL25').",
     {
@@ -37,21 +38,26 @@ server = MCPServer("bio-drug-chembl", "0.1.0")
         },
         "required": ["query"],
     },
+    server=server,
 )
 def chembl_compound_search(query: str, limit: int = 20):
     # ChEMBL 支持按 pref_name / synonym / chembl_id 检索
     if query.upper().startswith("CHEMBL"):
-        try:
-            data = http.get_json(f"{_BASE}/molecule/{query.upper()}.json")
-            return {"results": [data]}
-        except Exception as e:  # noqa: BLE001
-            return {"results": [], "error": str(e)}
+        res = safe_http_get(f"{_BASE}/molecule/{query.upper()}.json", timeout=30)
+        if not res["ok"]:
+            return {
+                "results": [],
+                "error": res["error"],
+                "error_kind": res["error_kind"],
+                "status": res["status"],
+            }
+        return {"results": [res["data"]]}
     data = http.get_json(f"{_BASE}/molecule/search.json",
                          params={"q": query, "limit": limit})
     return {"results": (data or {}).get("molecules") or []}
 
 
-@server.tool(
+@mcp_tool(
     "chembl_target_search",
     "Search biological targets in ChEMBL by gene symbol, protein name, or ChEMBL target ID.",
     {
@@ -62,14 +68,19 @@ def chembl_compound_search(query: str, limit: int = 20):
         },
         "required": ["query"],
     },
+    server=server,
 )
 def chembl_target_search(query: str, limit: int = 20):
     if query.upper().startswith("CHEMBL"):
-        try:
-            data = http.get_json(f"{_BASE}/target/{query.upper()}.json")
-            return {"results": [data]}
-        except Exception as e:  # noqa: BLE001
-            return {"results": [], "error": str(e)}
+        res = safe_http_get(f"{_BASE}/target/{query.upper()}.json", timeout=30)
+        if not res["ok"]:
+            return {
+                "results": [],
+                "error": res["error"],
+                "error_kind": res["error_kind"],
+                "status": res["status"],
+            }
+        return {"results": [res["data"]]}
     data = http.get_json(f"{_BASE}/target/search.json",
                          params={"q": query, "limit": limit})
     return {"results": (data or {}).get("targets") or []}

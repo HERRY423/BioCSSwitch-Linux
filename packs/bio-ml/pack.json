@@ -1,0 +1,29 @@
+{
+  "id": "bio-ml",
+  "name": "Biomedical machine-learning strategy layer",
+  "description": "A rigorous biomedical ML planning layer for multimodal foundation models, virtual-cell perturbation prediction, AI drug discovery, federated/privacy-preserving training, clinical validation gates and self-driving-lab loops. It generates reproducible study recipes, non-runnable skeletons, validation contracts and provenance fields; it does not train heavy models inside the MCP process.",
+  "version": "0.1.0",
+  "dependencies": ["bio-audit", "bio-privacy", "bio-singlecell", "bio-scfm", "bio-spatial", "bio-drug"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"},
+    {"name": "scikit-learn", "kind": "python", "required": false, "purpose": "Generated ML validation scripts"},
+    {"name": "pytorch", "kind": "python", "required": false, "purpose": "Generated foundation-model skeletons"}
+  ],
+  "requires_env": [],
+  "optional_env": [],
+  "depends_on": ["bio-audit", "bio-privacy", "bio-singlecell", "bio-scfm", "bio-spatial", "bio-drug"],
+  "task_tags": ["machine-learning", "biomedical-ai", "multimodal-foundation-models", "virtual-cell", "federated-learning", "drug-discovery", "validation-gate", "self-driving-lab"],
+  "servers": [
+    {
+      "name": "bio-ml",
+      "script": "packs/bio-ml/ml_server.py",
+      "env_pass": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "biomedical-ml-strategy",
+      "src": "packs/bio-ml/skills/biomedical-ml-strategy"
+    }
+  ]
+}

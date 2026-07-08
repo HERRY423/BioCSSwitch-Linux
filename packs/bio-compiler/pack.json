@@ -3,6 +3,10 @@
   "name": "研究问题编译器",
   "description": "把模糊的科研问题（如「EGFR 在 GBM 里还有没有新靶点价值」）编译成结构化研究任务书：研究对象 / 疾病 / 分子 / 干预 / 终点 / 数据库 / 排除标准 / 证据等级门槛 / 推荐工具链 / 该进哪个 workflow skill。确定性、可核对，识别不到的字段标 needs_user_input 交用户确认，不编。含一个 Skill 在开放式研究问题上先编译再检索。",
   "version": "0.1.0",
+  "dependencies": ["bio-workflows", "bio-audit", "bio-norm"],
+  "requires_tools": [
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP server"}
+  ],
   "requires_env": [],
   "optional_env": [],
   "depends_on": ["bio-workflows", "bio-audit", "bio-norm"],

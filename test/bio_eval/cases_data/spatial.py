@@ -31,6 +31,15 @@ def _score_spatial_fm(ctx):
     return 1.0 if skeleton and provenance and baseline else 0.6 if skeleton and provenance else 0.2
 
 
+def _score_spatial_integration(ctx):
+    text = (ctx["final_text"] or "").lower()
+    domain = any(k in text for k in ["domain", "spatially variable", "svg", "moran", "stagate"])
+    comm = any(k in text for k in ["communication", "ligand", "receptor", "niche", "permutation"])
+    multi = any(k in text for k in ["multi-omics", "protein", "atac", "histology", "same-slide"])
+    readiness = any(k in text for k in ["readiness", "diagnostic", "replication", "orthogonal", "provenance"])
+    return 1.0 if domain and comm and multi and readiness else 0.6 if sum([domain, comm, multi, readiness]) >= 3 else 0.2
+
+
 CASES = [
     {
         "id": "spatial_ipf_krt17_validation",
@@ -70,6 +79,27 @@ CASES = [
             ],
             "gate": ["tool_invoked"],
             "custom": _score_spatial_fm,
+        },
+    },
+    {
+        "id": "spatial_integrated_methods_guardrails",
+        "prompt": "Plan a spatial transcriptomics analysis for tumor tissue that needs spatial domains, ligand-receptor niche analysis, RNA+protein+histology integration, and a diagnostic-readiness check. Do not claim results.",
+        "tools": schemas.resolve([
+            "spatial_domain_recipe",
+            "spatial_communication_recipe",
+            "spatial_multimodal_recipe",
+            "spatial_translation_readiness_gate",
+        ]),
+        "max_tokens": 1100,
+        "rubric": {
+            "expect_tools": [
+                "spatial_domain_recipe",
+                "spatial_communication_recipe",
+                "spatial_multimodal_recipe",
+                "spatial_translation_readiness_gate",
+            ],
+            "gate": ["tool_invoked"],
+            "custom": _score_spatial_integration,
         },
     },
 ]

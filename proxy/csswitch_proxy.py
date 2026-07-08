@@ -23,8 +23,12 @@ Providers:
   DEEPSEEK_API_KEY=... python3 csswitch_proxy.py --provider deepseek --port 18991
   DASHSCOPE_API_KEY=... python3 csswitch_proxy.py --provider qwen --port 18991
 """
+from __future__ import annotations
+
 import argparse
 import json
+import logging
+import logging.handlers
 import os
 import queue
 import re
@@ -33,9 +37,10 @@ import socket
 import sys
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Callable
 
 import dsml_shim
 import task_router
@@ -164,6 +169,7 @@ PROVIDERS = {
 PROV = None      # 当前 provider 配置（dict），运行时设定
 KEY = None       # 当前 provider 的 key，只驻内存
 LOG = None
+LOGGER = logging.getLogger("csswitch.proxy")
 PROV_NAME = None  # 运行时设定；模块被 import 做测试时也要有定义，避免 handler NameError
 AUTH_SECRET = None  # 未设则不启用鉴权（保持旧行为）
 # relay 模式：最近一次 /v1/models 回源拉到的上游模型 id 列表。resolve_model 用它把
@@ -197,20 +203,39 @@ UPSTREAM_UA = "CSSwitch/0.2 (+https://github.com/SuperJJ007/CSSwitch)"
 _BLOCKED_SUFFIXES = ("anthropic.com", "claude.ai", "claude.com")
 
 
-def _is_blocked_host(host):
+def _is_blocked_host(host: str) -> bool:
     h = host.lower().rstrip(".")
     return any(h == s or h.endswith("." + s) for s in _BLOCKED_SUFFIXES)
 
 
-def log(msg):
-    line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-    print(line, flush=True)
-    if LOG:
-        with open(LOG, "a") as f:
-            f.write(line + "\n")
+def configure_logging(log_path: str | None = None) -> None:
+    LOGGER.handlers.clear()
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    stream = logging.StreamHandler(sys.stderr)
+    stream.setFormatter(fmt)
+    LOGGER.addHandler(stream)
+
+    if log_path:
+        parent = os.path.dirname(os.path.abspath(log_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(fmt)
+        LOGGER.addHandler(file_handler)
 
 
-def load_key(prov, args):
+def log(msg: str, level: int = logging.INFO) -> None:
+    if not LOGGER.handlers:
+        configure_logging(LOG)
+    LOGGER.log(level, msg)
+
+
+def load_key(prov: dict[str, Any], args: argparse.Namespace) -> str | None:
     env = prov["key_env"]
     if os.environ.get(env):
         return os.environ[env].strip()
@@ -225,7 +250,7 @@ def load_key(prov, args):
     return None
 
 
-def _provider_state(areq):
+def _provider_state(areq: dict[str, Any]) -> provider_policy.ProviderState:
     """从模块全局一次性组装 ProviderState（骨架侧），传给 compat / policy。
     nonce_factory 捕获 areq，保留旧 id(areq) 派生（字节级等价）。"""
     return provider_policy.ProviderState(
@@ -239,7 +264,13 @@ def _provider_state(areq):
     )
 
 
-def http_post(url, data, headers, attempts=4, timeout=300):
+def http_post(
+    url: str,
+    data: bytes,
+    headers: dict[str, str],
+    attempts: int = 4,
+    timeout: float = 300,
+) -> tuple[bytes, str]:
     """POST 上游；重试覆盖【连接 + 完整读体】（含 SSL EOF、握手超时、对端断开、IncompleteRead），
     对服务端明确响应（HTTPError，如 400）不重试。返回 (body_bytes, content_type)。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
@@ -258,7 +289,13 @@ def http_post(url, data, headers, attempts=4, timeout=300):
             raise
 
 
-def open_stream(url, data, headers, attempts=4, timeout=300):
+def open_stream(
+    url: str,
+    data: bytes,
+    headers: dict[str, str],
+    attempts: int = 4,
+    timeout: float = 300,
+) -> tuple[Any, bytes, str]:
     """打开上游流式连接并预读首行（把「200 但立刻空体」这种抖动也纳入重试）。
     返回 (resp, first_chunk, content_type)；首字节到手后不再重试。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
@@ -281,7 +318,12 @@ def open_stream(url, data, headers, attempts=4, timeout=300):
             raise
 
 
-def _open_stream_with_keepalive(write_chunk, url, data, headers):
+def _open_stream_with_keepalive(
+    write_chunk: Callable[[bytes], None],
+    url: str,
+    data: bytes,
+    headers: dict[str, str],
+) -> tuple[Any, bytes, str]:
     """等待上游首帧时持续给下游发 SSE 注释心跳。
 
     下游主请求可能带大量工具定义；部分上游首帧 TTFT 较长时，如果下游在这段
@@ -307,7 +349,12 @@ def _open_stream_with_keepalive(write_chunk, url, data, headers):
             write_chunk(keepalive)
 
 
-def http_get_json(url, headers, attempts=3, timeout=30):
+def http_get_json(
+    url: str,
+    headers: dict[str, str],
+    attempts: int = 3,
+    timeout: float = 30,
+) -> Any:
     """GET 上游并解析 JSON（relay 回源拉 /v1/models 用）。连接抖动重试，服务端明确响应不重试。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
     for i in range(attempts):
@@ -325,7 +372,7 @@ def http_get_json(url, headers, attempts=3, timeout=30):
             raise
 
 
-def normalize_openai_base(base):
+def normalize_openai_base(base: str | None) -> str:
     """OpenAI 兼容端点存 base root。用户若误填到 /chat/completions 或 /models，
     这里收敛回 root，避免后续双拼。"""
     b = (base or "").strip().rstrip("/")
@@ -336,18 +383,18 @@ def normalize_openai_base(base):
     return b
 
 
-def _ends_with_version_segment(base):
+def _ends_with_version_segment(base: str) -> bool:
     return bool(re.search(r"/v\d+(?:\.\d+)?$", base))
 
 
-def openai_endpoint(base, suffix):
+def openai_endpoint(base: str, suffix: str) -> str:
     root = normalize_openai_base(base)
     if not _ends_with_version_segment(root):
         root = root + "/v1"
     return root + suffix
 
 
-def _upstream_auth_headers():
+def _upstream_auth_headers() -> dict[str, str]:
     """上游鉴权头：按当前 provider 的 auth_style 装 x-api-key / bearer / both。
     deepseek 未设 → 默认 x-api-key（保持原状）；relay = both。"""
     style = PROV.get("auth_style", "x-api-key")
@@ -359,7 +406,7 @@ def _upstream_auth_headers():
     return h
 
 
-def fetch_relay_models():
+def fetch_relay_models() -> list[dict[str, Any]]:
     """回源拉上游模型列表，归一化成 Science 可消费的模型列表。relay 会刷新
     RELAY_MODELS 缓存（供 resolve_model 贴合）；openai-custom 仅用于模型发现。返回 list（可空）。"""
     global RELAY_MODELS
@@ -389,7 +436,7 @@ def fetch_relay_models():
     return out
 
 
-def build_models_response():
+def build_models_response() -> tuple[int, dict[str, Any]]:
     """装配 /v1/models 响应，返回 (状态码, body dict)。协议锁定（修评审 P2-2）：
       - relay/openai-custom 回源成功 → (200, {data:[…含 supports_tools…]})。
       - 回源 HTTPError → (上游同状态码, {error_kind:"upstream", upstream_status, message})，
@@ -434,7 +481,7 @@ def build_models_response():
 
 
 # ---------- Anthropic -> OpenAI 翻译（qwen 路径） ----------
-def anthropic_to_openai(req):
+def anthropic_to_openai(req: dict[str, Any]) -> dict[str, Any]:
     msgs = []
     sys_prompt = req.get("system")
     if isinstance(sys_prompt, list):
@@ -494,7 +541,7 @@ def anthropic_to_openai(req):
     return out
 
 
-def map_tool_choice(tc, tools):
+def map_tool_choice(tc: Any, tools: list[dict[str, Any]] | None) -> Any:
     """把 Anthropic tool_choice 译成 OpenAI 兼容取值。
     any 不做通用映射：单工具直接指定该函数（等效强制且不依赖 required）；
     多工具退 "required"（DashScope 若不支持会以上游错误显式暴露，不静默退化）。"""
@@ -515,7 +562,7 @@ def map_tool_choice(tc, tools):
     return None
 
 
-def map_responses_tool_choice(tc, tools):
+def map_responses_tool_choice(tc: Any, tools: list[dict[str, Any]] | None) -> str | None:
     """把 Anthropic tool_choice 译成 Responses API 取值。
     千问 Responses 在 thinking mode 下会拒绝 required/object 形态；Science 会在
     reviewing/agent 路径发送强制工具选择。这里保守降级为 auto，宁可不强制工具，
@@ -536,7 +583,12 @@ def map_responses_tool_choice(tc, tools):
     return None
 
 
-def responses_max_output_tokens(req, model, state, has_tools):
+def responses_max_output_tokens(
+    req: dict[str, Any],
+    model: str,
+    state: provider_policy.ProviderState,
+    has_tools: bool,
+) -> int | None:
     value = provider_policy.clamp_max_tokens(req.get("max_tokens"), model, state)
     if not value:
         return value
@@ -549,11 +601,11 @@ def responses_max_output_tokens(req, model, state, has_tools):
     return value
 
 
-def _is_dashscope_responses():
+def _is_dashscope_responses() -> bool:
     return PROV.get("api_format") == "openai_responses" and "dashscope.aliyuncs.com" in (PROV.get("url") or "")
 
 
-def normalize_responses_tool_parameters(schema):
+def normalize_responses_tool_parameters(schema: Any) -> dict[str, Any]:
     if not isinstance(schema, dict):
         return {"type": "object", "properties": {}}
     out = dict(schema)
@@ -566,7 +618,7 @@ def normalize_responses_tool_parameters(schema):
     return out
 
 
-def map_responses_tools(tools):
+def map_responses_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     out = []
     for t in tools or []:
         name = t.get("name")
@@ -585,7 +637,7 @@ def map_responses_tools(tools):
     return out
 
 
-def _as_text(value):
+def _as_text(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, list):
@@ -595,7 +647,7 @@ def _as_text(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def anthropic_to_openai_responses(req):
+def anthropic_to_openai_responses(req: dict[str, Any]) -> dict[str, Any]:
     sys_prompt = req.get("system")
     if isinstance(sys_prompt, list):
         sys_prompt = "\n".join(b.get("text", "") for b in sys_prompt if isinstance(b, dict))
@@ -659,7 +711,7 @@ def anthropic_to_openai_responses(req):
     return out
 
 
-def openai_to_anthropic(resp, model_id):
+def openai_to_anthropic(resp: dict[str, Any], model_id: str) -> dict[str, Any]:
     choice = (resp.get("choices") or [{}])[0]
     msg = choice.get("message", {})
     blocks = []
@@ -684,7 +736,7 @@ def openai_to_anthropic(resp, model_id):
     }
 
 
-def _responses_output_text(item):
+def _responses_output_text(item: dict[str, Any]) -> str:
     parts = []
     for c in item.get("content") or []:
         if not isinstance(c, dict):
@@ -694,7 +746,7 @@ def _responses_output_text(item):
     return "".join(parts)
 
 
-def openai_responses_to_anthropic(resp, model_id):
+def openai_responses_to_anthropic(resp: dict[str, Any], model_id: str) -> dict[str, Any]:
     blocks = []
     for item in resp.get("output") or []:
         if not isinstance(item, dict):
@@ -735,10 +787,10 @@ class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "csswitch-proxy"
 
-    def log_message(self, *a):
+    def log_message(self, *a: Any) -> None:
         pass
 
-    def _send_json(self, code, obj):
+    def _send_json(self, code: int, obj: dict[str, Any]) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -749,11 +801,11 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _sse(self, event, data):
+    def _sse(self, event: str, data: dict[str, Any]) -> None:
         chunk = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
         self.wfile.write(hex(len(chunk))[2:].encode() + b"\r\n" + chunk + b"\r\n")
 
-    def _sse_error_and_terminate(self, msg):
+    def _sse_error_and_terminate(self, msg: str) -> None:
         frame = ("event: error\ndata: " + json.dumps(
             {"type": "error", "error": {"type": "api_error", "message": msg}},
             ensure_ascii=False) + "\n\n").encode()
@@ -761,7 +813,7 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b"0\r\n\r\n")
         self.wfile.flush()
 
-    def _auth_ok(self):
+    def _auth_ok(self) -> bool:
         if not AUTH_SECRET:
             return True
         prefix = "/" + AUTH_SECRET
@@ -777,7 +829,7 @@ class H(BaseHTTPRequestHandler):
             "type": "permission_error", "message": "forbidden"}})
         return False
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if not self._auth_ok():
             return
         if self.path.startswith("/v1/models"):
@@ -788,7 +840,7 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"type": "error", "error": {"type": "not_found_error", "message": self.path}})
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if not self._auth_ok():
             return
         # Content-Length 解析放在保护内：畸形头（如 "oops" / 负数）应回规范 400，
@@ -836,7 +888,7 @@ class H(BaseHTTPRequestHandler):
             self._handle_openai(areq)
 
     # ---- HTTP CONNECT 隧道：Anthropic 域名 fast-fail、其余透传（修 #3） ----
-    def do_CONNECT(self):
+    def do_CONNECT(self) -> None:
         # operon 用 https_proxy 走到这里；self.path 形如 "host:port"。
         # 【为何不走 _auth_ok】CONNECT 把目标放在请求行、没有可嵌 path-secret 的位置，
         # operon 的 https_proxy 也带不上 secret。此处不鉴权的实际风险面很小：
@@ -879,7 +931,7 @@ class H(BaseHTTPRequestHandler):
                 pass
         self.close_connection = True
 
-    def _connect_reply(self, code):
+    def _connect_reply(self, code: int) -> None:
         """CONNECT 的短响应（拒绝/错误）：空体 + 主动关连接。"""
         self.send_response(code)
         self.send_header("Content-Length", "0")
@@ -888,7 +940,7 @@ class H(BaseHTTPRequestHandler):
         self.close_connection = True
 
     @staticmethod
-    def _tunnel(client, upstream):
+    def _tunnel(client: socket.socket, upstream: socket.socket) -> None:
         """在两个已连接 socket 间双向搬字节，直到任一侧 EOF / 出错。"""
         socks = [client, upstream]
         while True:
@@ -910,7 +962,7 @@ class H(BaseHTTPRequestHandler):
                     return
 
     # ---- Ultra：任务路由 + WellFallback + 子代理 guardrails（非流式 v1） ----
-    def _handle_ultra(self, areq):
+    def _handle_ultra(self, areq: dict[str, Any]) -> bool:
         active_ctx = task_router.current_context(
             PROV_NAME, PROV, KEY, RELAY_FORCE_MODEL, RELAY_THINKING)
         cfg = task_router.load_runtime_config()
@@ -922,7 +974,7 @@ class H(BaseHTTPRequestHandler):
         return True
 
     # ---- DeepSeek：Anthropic 原生透传（改模型名+换鉴权+夹 max_tokens+重试） ----
-    def _handle_anthropic(self, areq):
+    def _handle_anthropic(self, areq: dict[str, Any]) -> None:
         state = _provider_state(areq)
         upstream_body, ctx = anthropic_compat.transform_request(areq, state)
         stream = bool(upstream_body.get("stream"))
@@ -950,7 +1002,7 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 headers_sent = True
 
-                def _wc(b):
+                def _wc(b: bytes) -> None:
                     if b:
                         self.wfile.write(hex(len(b))[2:].encode() + b"\r\n" + b + b"\r\n")
                         self.wfile.flush()
@@ -1028,7 +1080,7 @@ class H(BaseHTTPRequestHandler):
                     "type": "api_error", "message": str(e)}})
 
     # ---- Qwen：翻译到 OpenAI，非流式取全再按需 SSE 回放 ----
-    def _handle_openai(self, areq):
+    def _handle_openai(self, areq: dict[str, Any]) -> None:
         model_id = areq.get("model", "claude-sonnet-5")
         stream = bool(areq.get("stream"))
         if PROV.get("api_format") == "openai_responses":
@@ -1066,7 +1118,7 @@ class H(BaseHTTPRequestHandler):
             log(f"  !! 代理异常: {e}")
             self._send_json(502, {"type": "error", "error": {"type": "api_error", "message": str(e)}})
 
-    def _replay_as_sse(self, aresp):
+    def _replay_as_sse(self, aresp: dict[str, Any]) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1115,6 +1167,7 @@ if __name__ == "__main__":
     PROV_NAME = args.provider
     PROV = PROVIDERS[PROV_NAME]
     LOG = args.log
+    configure_logging(LOG)
     KEY = load_key(PROV, args)
     AUTH_SECRET = os.environ.get("CSSWITCH_AUTH_TOKEN") or args.auth_token
     ULTRA_MODE = os.environ.get("CSSWITCH_ULTRA_MODE", "off").strip() or "off"
@@ -1124,8 +1177,9 @@ if __name__ == "__main__":
     if PROV_NAME == "relay":
         base = (os.environ.get("CSSWITCH_RELAY_BASE_URL") or args.relay_base or "").strip().rstrip("/")
         if not base or not re.match(r"^https?://", base):
-            print("relay 需要中转站 base_url（http(s)://…）。用 --relay-base 或环境变量 "
-                  "CSSWITCH_RELAY_BASE_URL 提供。", file=sys.stderr)
+            LOGGER.error(
+                "relay requires an http(s) base_url; set --relay-base or CSSWITCH_RELAY_BASE_URL"
+            )
             sys.exit(1)
         PROV = dict(PROV)
         PROV["url"] = base + "/v1/messages"
@@ -1137,8 +1191,10 @@ if __name__ == "__main__":
     elif PROV_NAME in ("openai-custom", "openai-responses"):
         base = normalize_openai_base(os.environ.get("CSSWITCH_OPENAI_BASE_URL") or args.openai_base or "")
         if not base or not re.match(r"^https?://", base):
-            print(f"{PROV_NAME} 需要 OpenAI base root（http(s)://…）。用 --openai-base 或环境变量 "
-                  "CSSWITCH_OPENAI_BASE_URL 提供。", file=sys.stderr)
+            LOGGER.error(
+                "%s requires an http(s) OpenAI base root; set --openai-base or CSSWITCH_OPENAI_BASE_URL",
+                PROV_NAME,
+            )
             sys.exit(1)
         forced = (os.environ.get("CSSWITCH_OPENAI_MODEL") or "").strip()
         PROV = dict(PROV)
@@ -1155,7 +1211,7 @@ if __name__ == "__main__":
         PROV = dict(PROV)
         PROV["url"] = _up
     if not KEY:
-        print(f"找不到 {PROV['key_env']}。用环境变量或 --env-file <路径> 提供。", file=sys.stderr)
+        LOGGER.error("missing %s; set the environment variable or pass --env-file", PROV["key_env"])
         sys.exit(1)
     # DSML 兜底 shim 模式（默认 off；relay 恒 off；deepseek 且 dsml_capable 才读环境变量）。
     SHIM_MODE = dsml_shim.shim_mode(PROV_NAME, PROV)
@@ -1170,9 +1226,11 @@ if __name__ == "__main__":
             break
         except OSError as e:
             if attempt == 9:
-                print(f"[csswitch] 端口 {args.port} 无法绑定：{e}。"
-                      f"可能被占用（结束占用进程，或在面板「高级」里换个端口）。",
-                      file=sys.stderr, flush=True)
+                LOGGER.error(
+                    "port %s cannot be bound: %s. It may already be in use; stop the owner or choose another port.",
+                    args.port,
+                    e,
+                )
                 sys.exit(2)
             time.sleep(0.3)
     srv.serve_forever()

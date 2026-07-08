@@ -28,7 +28,7 @@ from _lib import provenance as prov  # noqa: E402
 from _lib.server import MCPServer  # noqa: E402
 
 
-server = MCPServer("bio-singlecell", "0.2.0")
+server = MCPServer("bio-singlecell", "0.3.0")
 
 
 def _recipe_hash(tool: str, params: Dict[str, Any]) -> str:
@@ -418,6 +418,535 @@ def _render_batch_script(method: str, batch_key: str, seed: int) -> str:
         ]
     tail = ["sc.tl.umap(adata)", f'adata.write_h5ad("batch_integrated_{method}.h5ad")']
     return "\n".join(common + body + tail)
+
+
+def _workflow_toolchain(batch_method: str, annotation_method: str, include_scfm: bool) -> List[Dict[str, Any]]:
+    tools = [
+        {"name": "scanpy", "kind": "python", "step": "QC, normalization, HVG, PCA/UMAP/Leiden"},
+        {"name": "scrublet", "kind": "python", "step": "doublet detection"},
+        {"name": "scvi-tools", "kind": "python", "step": "SCVI/TOTALVI/MULTIVI latent integration"},
+        {"name": "celltypist", "kind": "python", "step": "reference cell-type annotation"},
+        {"name": "SingleR", "kind": "R/Bioconductor", "step": "R reference annotation fallback"},
+        {"name": "scDblFinder", "kind": "R/Bioconductor", "step": "R doublet detection fallback"},
+    ]
+    if batch_method == "harmony":
+        tools.append({"name": "harmonypy", "kind": "python", "step": "Harmony batch integration"})
+    if annotation_method == "singler":
+        tools.append({"name": "celldex", "kind": "R/Bioconductor", "step": "SingleR reference data"})
+    if include_scfm:
+        tools.extend([
+            {"name": "Geneformer", "kind": "python/model", "step": "foundation-model embedding adapter"},
+            {"name": "scGPT", "kind": "python/model", "step": "foundation-model embedding adapter"},
+        ])
+    return tools
+
+
+def _scanpy_qc_cli() -> str:
+    return '''#!/usr/bin/env python3
+import argparse
+import json
+import numpy as np
+import scanpy as sc
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--metrics", required=True)
+ap.add_argument("--min-genes", type=int, default=200)
+ap.add_argument("--min-cells", type=int, default=3)
+ap.add_argument("--seed", type=int, default=0)
+args = ap.parse_args()
+np.random.seed(args.seed)
+adata = sc.read_h5ad(args.input)
+sc.pp.filter_cells(adata, min_genes=args.min_genes)
+sc.pp.filter_genes(adata, min_cells=args.min_cells)
+if "mt" not in adata.var:
+    adata.var["mt"] = adata.var_names.str.upper().str.startswith(("MT-", "MT."))
+sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+if "counts" not in adata.layers:
+    adata.layers["counts"] = adata.X.copy()
+adata.obs[["n_genes_by_counts", "total_counts", "pct_counts_mt"]].to_csv(args.metrics, sep="\\t")
+adata.uns["biocsswitch_qc"] = {"min_genes": args.min_genes, "min_cells": args.min_cells, "seed": args.seed}
+adata.write_h5ad(args.output)
+'''
+
+
+def _scrublet_cli() -> str:
+    return '''#!/usr/bin/env python3
+import argparse
+import numpy as np
+import scanpy as sc
+import scrublet as scr
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--scores", required=True)
+ap.add_argument("--expected-doublet-rate", type=float, default=0.06)
+ap.add_argument("--seed", type=int, default=0)
+args = ap.parse_args()
+np.random.seed(args.seed)
+adata = sc.read_h5ad(args.input)
+counts = adata.layers["counts"] if "counts" in adata.layers else adata.X
+scrub = scr.Scrublet(counts, expected_doublet_rate=args.expected_doublet_rate)
+doublet_scores, predicted_doublets = scrub.scrub_doublets()
+adata.obs["doublet_score"] = doublet_scores
+adata.obs["predicted_doublet"] = predicted_doublets
+adata.obs[["doublet_score", "predicted_doublet"]].to_csv(args.scores, sep="\\t")
+adata = adata[~adata.obs["predicted_doublet"]].copy()
+adata.write_h5ad(args.output)
+'''
+
+
+def _scvi_cli(batch_key: str) -> str:
+    return f'''#!/usr/bin/env python3
+import argparse
+import numpy as np
+import scanpy as sc
+import scvi
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--latent-key", default="X_scVI")
+ap.add_argument("--batch-key", default="{batch_key}")
+ap.add_argument("--seed", type=int, default=0)
+args = ap.parse_args()
+np.random.seed(args.seed)
+scvi.settings.seed = args.seed
+adata = sc.read_h5ad(args.input)
+assert "counts" in adata.layers, "scVI requires raw counts in adata.layers['counts']"
+setup_kwargs = {{"layer": "counts"}}
+if args.batch_key and args.batch_key in adata.obs:
+    setup_kwargs["batch_key"] = args.batch_key
+scvi.model.SCVI.setup_anndata(adata, **setup_kwargs)
+model = scvi.model.SCVI(adata, n_latent=30)
+model.train(max_epochs=400)
+adata.obsm[args.latent_key] = model.get_latent_representation()
+sc.pp.neighbors(adata, use_rep=args.latent_key)
+sc.tl.umap(adata)
+sc.tl.leiden(adata, key_added="leiden")
+adata.write_h5ad(args.output)
+'''
+
+
+def _harmony_cli(batch_key: str) -> str:
+    return f'''#!/usr/bin/env python3
+import argparse
+import numpy as np
+import scanpy as sc
+import scanpy.external as sce
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--batch-key", default="{batch_key}")
+ap.add_argument("--seed", type=int, default=0)
+args = ap.parse_args()
+np.random.seed(args.seed)
+adata = sc.read_h5ad(args.input)
+assert args.batch_key in adata.obs, f"missing batch key: {{args.batch_key}}"
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+sc.pp.highly_variable_genes(adata, n_top_genes=3000, flavor="seurat_v3", layer="counts")
+adata = adata[:, adata.var["highly_variable"]].copy()
+sc.pp.scale(adata, max_value=10)
+sc.tl.pca(adata, svd_solver="arpack")
+sce.pp.harmony_integrate(adata, key=args.batch_key)
+sc.pp.neighbors(adata, use_rep="X_pca_harmony")
+sc.tl.umap(adata)
+sc.tl.leiden(adata, key_added="leiden")
+adata.write_h5ad(args.output)
+'''
+
+
+def _celltypist_cli(organism: str) -> str:
+    default_model = "Immune_All_Low.pkl" if organism == "human" else "Mouse_Whole_Brain.pkl"
+    return f'''#!/usr/bin/env python3
+import argparse
+import scanpy as sc
+import celltypist
+from celltypist import models
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--predictions", required=True)
+ap.add_argument("--model", default="{default_model}")
+args = ap.parse_args()
+adata = sc.read_h5ad(args.input)
+models.download_models(force_update=False)
+pred = celltypist.annotate(adata, model=args.model, majority_voting=True)
+adata = pred.to_adata()
+cols = [c for c in ("majority_voting", "predicted_labels", "conf_score") if c in adata.obs]
+adata.obs[cols].to_csv(args.predictions, sep="\\t")
+adata.write_h5ad(args.output)
+'''
+
+
+def _singler_cli(organism: str) -> str:
+    ref = "HumanPrimaryCellAtlasData" if organism == "human" else "MouseRNAseqData"
+    return f'''#!/usr/bin/env Rscript
+suppressPackageStartupMessages({{
+  library(SingleR)
+  library(SingleCellExperiment)
+  library(zellkonverter)
+  library(celldex)
+}})
+args <- commandArgs(trailingOnly=TRUE)
+infile <- args[[1]]
+outfile <- args[[2]]
+predfile <- args[[3]]
+sce <- readH5AD(infile)
+ref <- celldex::{ref}()
+pred <- SingleR(test=sce, ref=ref, labels=ref$label.main)
+sce$SingleR_label <- pred$labels
+write.table(as.data.frame(pred), predfile, sep="\\t", quote=FALSE)
+writeH5AD(sce, outfile)
+'''
+
+
+def _scfm_adapter_cli() -> str:
+    return '''#!/usr/bin/env python3
+"""Adapter slot for Geneformer/scGPT embeddings.
+
+This is a real workflow step: it reads a configured model family and writes the
+embedding back to AnnData. The exact package APIs move quickly, so the adapter
+fails closed until model_dir/checkpoint_dir is pinned in config.yaml.
+"""
+import argparse
+import sys
+import scanpy as sc
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--input", required=True)
+ap.add_argument("--output", required=True)
+ap.add_argument("--model", choices=["geneformer", "scgpt"], required=True)
+ap.add_argument("--model-dir", required=True)
+ap.add_argument("--embedding-key", default=None)
+args = ap.parse_args()
+if args.model_dir in {"", "<FILL>", "PATH_TO_MODEL"}:
+    raise SystemExit("Pin --model-dir/checkpoint first; do not fabricate scFM embeddings.")
+adata = sc.read_h5ad(args.input)
+key = args.embedding_key or ("X_geneformer" if args.model == "geneformer" else "X_scgpt")
+if args.model == "geneformer":
+    from geneformer import EmbExtractor  # type: ignore
+    # Expected input: Geneformer-tokenized dataset or an adapter that tokenizes
+    # this AnnData with Ensembl IDs. Keep raw AnnData hash in provenance.
+    extractor = EmbExtractor(model_type="CellClassifier", model_directory=args.model_dir)
+    emb = extractor.extract_embs(adata)  # project adapter may override this call
+elif args.model == "scgpt":
+    import torch  # noqa: F401
+    from scgpt.tasks import embed_data  # type: ignore
+    emb = embed_data(adata, model_dir=args.model_dir)
+adata.obsm[key] = emb
+adata.write_h5ad(args.output)
+'''
+
+
+def _workflow_envs() -> Dict[str, str]:
+    return {
+        "envs/scanpy.yaml": """channels: [conda-forge, bioconda]
+dependencies:
+  - python>=3.10
+  - scanpy
+  - anndata
+  - numpy
+  - scipy
+  - pandas
+  - leidenalg
+  - igraph
+  - pip
+""",
+        "envs/scrublet.yaml": """channels: [conda-forge, bioconda]
+dependencies:
+  - python>=3.10
+  - scanpy
+  - scrublet
+  - matplotlib
+""",
+        "envs/scvi.yaml": """channels: [conda-forge, bioconda, pytorch]
+dependencies:
+  - python>=3.10
+  - scanpy
+  - scvi-tools
+  - pytorch
+  - pip
+""",
+        "envs/celltypist.yaml": """channels: [conda-forge, bioconda]
+dependencies:
+  - python>=3.10
+  - scanpy
+  - celltypist
+""",
+        "envs/bioconductor.yaml": """channels: [conda-forge, bioconda]
+dependencies:
+  - r-base
+  - bioconductor-singler
+  - bioconductor-singlecellexperiment
+  - bioconductor-zellkonverter
+  - bioconductor-celldex
+  - bioconductor-scdblfinder
+""",
+    }
+
+
+def _render_snakemake_workflow(params: Dict[str, Any]) -> Dict[str, str]:
+    batch_script = "scripts/integrate_scvi.py" if params["batch_method"] == "scvi" else "scripts/integrate_harmony.py"
+    annotation_rule = "annotate_celltypist" if params["annotation_method"] == "celltypist" else "annotate_singler"
+    files = {
+        "config.yaml": f"""input_h5ad: {params['input_h5ad']}
+outdir: results
+seed: {params['seed']}
+batch_key: {params['batch_key']}
+expected_doublet_rate: {params['expected_doublet_rate']}
+scfm_model: {params['scfm_model']}
+scfm_model_dir: PATH_TO_MODEL
+""",
+        "Snakefile": f'''configfile: "config.yaml"
+
+rule all:
+    input:
+        "results/celltype_annotated.h5ad",
+        "results/qc_metrics.tsv",
+        "results/provenance.json"
+
+rule qc_scanpy:
+    input: config["input_h5ad"]
+    output:
+        h5ad="results/qc_filtered.h5ad",
+        metrics="results/qc_metrics.tsv"
+    conda: "envs/scanpy.yaml"
+    shell:
+        "python scripts/qc_scanpy.py --input {{input}} --output {{output.h5ad}} --metrics {{output.metrics}} --seed {{config[seed]}}"
+
+rule doublet_scrublet:
+    input: "results/qc_filtered.h5ad"
+    output:
+        h5ad="results/doublet_filtered.h5ad",
+        scores="results/doublet_scores.tsv"
+    conda: "envs/scrublet.yaml"
+    shell:
+        "python scripts/doublet_scrublet.py --input {{input}} --output {{output.h5ad}} --scores {{output.scores}} --expected-doublet-rate {{config[expected_doublet_rate]}} --seed {{config[seed]}}"
+
+rule batch_integrate:
+    input: "results/doublet_filtered.h5ad"
+    output: "results/batch_integrated.h5ad"
+    conda: "envs/scvi.yaml"
+    shell:
+        "python {batch_script} --input {{input}} --output {{output}} --batch-key {{config[batch_key]}} --seed {{config[seed]}}"
+
+rule annotate_celltypist:
+    input: "results/batch_integrated.h5ad"
+    output:
+        h5ad="results/celltype_annotated.h5ad",
+        predictions="results/celltypist_predictions.tsv"
+    conda: "envs/celltypist.yaml"
+    shell:
+        "python scripts/annotate_celltypist.py --input {{input}} --output {{output.h5ad}} --predictions {{output.predictions}}"
+
+rule annotate_singler:
+    input: "results/batch_integrated.h5ad"
+    output:
+        h5ad="results/celltype_annotated.h5ad",
+        predictions="results/singler_predictions.tsv"
+    conda: "envs/bioconductor.yaml"
+    shell:
+        "Rscript scripts/annotate_singler.R {{input}} {{output.h5ad}} {{output.predictions}}"
+
+rule scfm_embedding:
+    input: "results/celltype_annotated.h5ad"
+    output: "results/scfm_embedded.h5ad"
+    conda: "envs/scvi.yaml"
+    shell:
+        "python scripts/scfm_embed_adapter.py --input {{input}} --output {{output}} --model {{config[scfm_model]}} --model-dir {{config[scfm_model_dir]}}"
+
+rule provenance:
+    input: rules.{annotation_rule}.output.h5ad
+    output: "results/provenance.json"
+    shell:
+        "python - <<'PY'\\nimport json; json.dump({{'workflow':'snakemake-singlecell','input':'{{input}}'}}, open('{{output}}','w'), indent=2)\\nPY"
+''',
+        "scripts/qc_scanpy.py": _scanpy_qc_cli(),
+        "scripts/doublet_scrublet.py": _scrublet_cli(),
+        "scripts/integrate_scvi.py": _scvi_cli(params["batch_key"]),
+        "scripts/integrate_harmony.py": _harmony_cli(params["batch_key"]),
+        "scripts/annotate_celltypist.py": _celltypist_cli(params["organism"]),
+        "scripts/annotate_singler.R": _singler_cli(params["organism"]),
+        "scripts/scfm_embed_adapter.py": _scfm_adapter_cli(),
+    }
+    files.update(_workflow_envs())
+    return files
+
+
+def _render_nextflow_workflow(params: Dict[str, Any]) -> Dict[str, str]:
+    integrate_script = "integrate_scvi.py" if params["batch_method"] == "scvi" else "integrate_harmony.py"
+    files = {
+        "nextflow.config": f"""nextflow.enable.dsl = 2
+params.input_h5ad = "{params['input_h5ad']}"
+params.outdir = "results"
+params.seed = {params['seed']}
+params.batch_key = "{params['batch_key']}"
+params.expected_doublet_rate = {params['expected_doublet_rate']}
+params.scfm_model = "{params['scfm_model']}"
+params.scfm_model_dir = "PATH_TO_MODEL"
+process.conda = true
+""",
+        "main.nf": f'''process QC_SCANPY {{
+  conda "envs/scanpy.yaml"
+  input:
+    path h5ad
+  output:
+    path "qc_filtered.h5ad"
+    path "qc_metrics.tsv"
+  script:
+  """
+  python scripts/qc_scanpy.py --input $h5ad --output qc_filtered.h5ad --metrics qc_metrics.tsv --seed ${{params.seed}}
+  """
+}}
+
+process DOUBLET_SCRUBLET {{
+  conda "envs/scrublet.yaml"
+  input:
+    path h5ad
+  output:
+    path "doublet_filtered.h5ad"
+    path "doublet_scores.tsv"
+  script:
+  """
+  python scripts/doublet_scrublet.py --input $h5ad --output doublet_filtered.h5ad --scores doublet_scores.tsv --expected-doublet-rate ${{params.expected_doublet_rate}} --seed ${{params.seed}}
+  """
+}}
+
+process BATCH_INTEGRATE {{
+  conda "envs/scvi.yaml"
+  input:
+    path h5ad
+  output:
+    path "batch_integrated.h5ad"
+  script:
+  """
+  python scripts/{integrate_script} --input $h5ad --output batch_integrated.h5ad --batch-key ${{params.batch_key}} --seed ${{params.seed}}
+  """
+}}
+
+process ANNOTATE_CELLTYPIST {{
+  conda "envs/celltypist.yaml"
+  input:
+    path h5ad
+  output:
+    path "celltype_annotated.h5ad"
+    path "celltypist_predictions.tsv"
+  script:
+  """
+  python scripts/annotate_celltypist.py --input $h5ad --output celltype_annotated.h5ad --predictions celltypist_predictions.tsv
+  """
+}}
+
+process SCFM_EMBED {{
+  conda "envs/scvi.yaml"
+  input:
+    path h5ad
+  output:
+    path "scfm_embedded.h5ad"
+  script:
+  """
+  python scripts/scfm_embed_adapter.py --input $h5ad --output scfm_embedded.h5ad --model ${{params.scfm_model}} --model-dir ${{params.scfm_model_dir}}
+  """
+}}
+
+workflow {{
+  input_ch = Channel.fromPath(params.input_h5ad)
+  qc = QC_SCANPY(input_ch)
+  filtered = DOUBLET_SCRUBLET(qc.out[0])
+  integrated = BATCH_INTEGRATE(filtered.out[0])
+  annotated = ANNOTATE_CELLTYPIST(integrated.out[0])
+  SCFM_EMBED(annotated.out[0])
+}}
+''',
+        "scripts/qc_scanpy.py": _scanpy_qc_cli(),
+        "scripts/doublet_scrublet.py": _scrublet_cli(),
+        "scripts/integrate_scvi.py": _scvi_cli(params["batch_key"]),
+        "scripts/integrate_harmony.py": _harmony_cli(params["batch_key"]),
+        "scripts/annotate_celltypist.py": _celltypist_cli(params["organism"]),
+        "scripts/scfm_embed_adapter.py": _scfm_adapter_cli(),
+    }
+    files.update(_workflow_envs())
+    return files
+
+
+@server.tool(
+    "sc_workflow_recipe",
+    "Generate a runnable workflow package instead of a loose Python skeleton. Supports Snakemake or Nextflow "
+    "for AnnData/H5AD downstream analysis, with scanpy QC, Scrublet doublet detection, scVI/Harmony batch "
+    "integration, CellTypist/SingleR annotation, and an explicit Geneformer/scGPT adapter slot. Also returns "
+    "an nf-core/scrnaseq handoff for raw FASTQ inputs.",
+    {
+        "type": "object",
+        "properties": {
+            "engine": {"type": "string", "enum": ["snakemake", "nextflow"], "default": "snakemake"},
+            "input_h5ad": {"type": "string", "default": "data/input.h5ad"},
+            "organism": {"type": "string", "enum": ["human", "mouse"], "default": "human"},
+            "batch_key": {"type": "string", "default": "batch"},
+            "batch_method": {"type": "string", "enum": ["scvi", "harmony"], "default": "scvi"},
+            "annotation_method": {"type": "string", "enum": ["celltypist", "singler"], "default": "celltypist"},
+            "include_scfm": {"type": "boolean", "default": True},
+            "scfm_model": {"type": "string", "enum": ["geneformer", "scgpt"], "default": "geneformer"},
+            "expected_doublet_rate": {"type": "number", "default": 0.06},
+            "seed": {"type": "integer", "default": 0},
+        },
+    },
+)
+def sc_workflow_recipe(
+    engine: str = "snakemake",
+    input_h5ad: str = "data/input.h5ad",
+    organism: str = "human",
+    batch_key: str = "batch",
+    batch_method: str = "scvi",
+    annotation_method: str = "celltypist",
+    include_scfm: bool = True,
+    scfm_model: str = "geneformer",
+    expected_doublet_rate: float = 0.06,
+    seed: int = 0,
+):
+    params = {
+        "engine": engine,
+        "input_h5ad": input_h5ad,
+        "organism": organism,
+        "batch_key": batch_key,
+        "batch_method": batch_method,
+        "annotation_method": annotation_method,
+        "include_scfm": include_scfm,
+        "scfm_model": scfm_model,
+        "expected_doublet_rate": expected_doublet_rate,
+        "seed": seed,
+    }
+    recipe_hash = _recipe_hash("sc_workflow_recipe", params)
+    files = _render_nextflow_workflow(params) if engine == "nextflow" else _render_snakemake_workflow(params)
+    command = (
+        "nextflow run main.nf -profile conda --input_h5ad data/input.h5ad"
+        if engine == "nextflow"
+        else "snakemake --use-conda --cores 8"
+    )
+    return {
+        "recipe_hash": recipe_hash,
+        "engine": engine,
+        "params": params,
+        "command": command,
+        "files": files,
+        "toolchain": _workflow_toolchain(batch_method, annotation_method, include_scfm),
+        "nf_core_fastq_handoff": {
+            "pipeline": "nf-core/scrnaseq",
+            "when": "Use for raw FASTQ/barcode processing before this H5AD downstream workflow.",
+            "command": "nextflow run nf-core/scrnaseq -profile docker --input samplesheet.csv --fasta genome.fa --gtf genes.gtf --protocol 10XV3 --aligner star --outdir nfcore_out",
+            "samplesheet_columns": ["sample", "fastq_1", "fastq_2", "expected_cells"],
+        },
+        "provenance_skeleton": _provenance_skeleton("sc_workflow_recipe", recipe_hash, {"workflow": params}),
+        "warnings": [
+            "scFM adapter fails closed until model_dir/checkpoint is pinned; do not fabricate embeddings.",
+            "For clinical/PHI data, run bio-privacy before writing file paths into shared workflow configs.",
+        ],
+    }
 
 
 @server.tool(

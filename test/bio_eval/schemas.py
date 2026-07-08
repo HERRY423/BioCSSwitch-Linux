@@ -550,6 +550,54 @@ SCHEMAS: Dict[str, Dict[str, Any]] = {
             "required": ["model"],
         },
     },
+    "spatial_domain_recipe": {
+        "name": "spatial_domain_recipe",
+        "description": "Generate spatially variable gene and spatial-domain recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"platform": {"type": "string"}, "task": {"type": "string"}, "coordinate_key": {"type": "string"}, "domain_key": {"type": "string"}},
+        },
+    },
+    "spatial_communication_recipe": {
+        "name": "spatial_communication_recipe",
+        "description": "Generate spatial cell-cell communication / niche interaction recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"platform": {"type": "string"}, "method": {"type": "string"}, "celltype_key": {"type": "string"}, "condition_key": {"type": "string"}},
+        },
+    },
+    "spatial_multimodal_recipe": {
+        "name": "spatial_multimodal_recipe",
+        "description": "Generate spatial multi-omics integration recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"modalities": {"type": "array", "items": {"type": "string"}}, "platform": {"type": "string"}, "same_slide": {"type": "boolean"}, "integration_goal": {"type": "string"}},
+        },
+    },
+    "spatial_histology_prediction_plan": {
+        "name": "spatial_histology_prediction_plan",
+        "description": "Generate not-runnable virtual spatial transcriptomics / H&E-to-ST plan",
+        "input_schema": {
+            "type": "object",
+            "properties": {"model_family": {"type": "string"}, "task_type": {"type": "string"}, "platform": {"type": "string"}, "validation_strategy": {"type": "string"}},
+        },
+    },
+    "spatial_atlas_3d_recipe": {
+        "name": "spatial_atlas_3d_recipe",
+        "description": "Generate serial-section 3D / 4D spatial atlas recipe",
+        "input_schema": {
+            "type": "object",
+            "properties": {"atlas_goal": {"type": "string"}, "registration_method": {"type": "string"}, "section_key": {"type": "string"}, "timepoint_key": {"type": "string"}},
+        },
+    },
+    "spatial_translation_readiness_gate": {
+        "name": "spatial_translation_readiness_gate",
+        "description": "Gate spatial claims by replication, validation, provenance and benchmark readiness",
+        "input_schema": {
+            "type": "object",
+            "properties": {"use_case": {"type": "string"}, "platform": {"type": "string"}, "has_replicates": {"type": "boolean"}, "has_orthogonal_validation": {"type": "boolean"}, "has_locked_provenance": {"type": "boolean"}},
+        },
+    },
     "ipf_krt17_spatial_validation_recipe": {
         "name": "ipf_krt17_spatial_validation_recipe",
         "description": "Generate IPF/KRT17 spatial niche validation recipe",

@@ -83,6 +83,56 @@ def test_fixtures():
             fixtures.deactivate()
 
 
+def test_mcp_helpers():
+    print("[mcp helpers]")
+    from _lib import fixtures
+    from _lib.mcp_helpers import mcp_tool, safe_http_get, validate_json_object
+    from _lib.server import MCPServer
+
+    srv = MCPServer("helper-smoke", "0.0.1")
+
+    @mcp_tool(
+        "helper_ping",
+        "Return input.",
+        {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
+        server=srv,
+    )
+    def helper_ping(q: str) -> dict:
+        return {"q": q}
+
+    check("mcp_tool registers tool", "helper_ping" in srv.tools)
+    errs = validate_json_object(
+        {"q": 1},
+        {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
+    )
+    check("schema helper catches wrong type", any("q must be string" in e for e in errs))
+    errs = validate_json_object(
+        {"limit": True},
+        {"type": "object", "properties": {"limit": {"type": "integer"}}},
+    )
+    check("schema helper rejects bool as integer", any("limit must be integer" in e for e in errs))
+
+    fixtures.activate(_FIX, mode="replay")
+    try:
+        ok = safe_http_get(
+            "https://rest.genenames.org/fetch/symbol/EGFR",
+            headers={"Accept": "application/json"},
+        )
+        docs = (((ok.get("data") or {}).get("response") or {}).get("docs") or [])
+        check("safe_http_get fixture hit", ok["ok"] is True and docs and docs[0].get("symbol") == "EGFR")
+
+        miss = safe_http_get(
+            "https://rest.genenames.org/fetch/symbol/NOSUCHGENE",
+            headers={"Accept": "application/json"},
+        )
+        check(
+            "safe_http_get standardizes fixture miss",
+            miss["ok"] is False and miss["error_kind"] == "FixtureMiss",
+        )
+    finally:
+        fixtures.deactivate()
+
+
 def test_tool_executor():
     print("[tool_executor]")
     from _lib import fixtures
@@ -160,13 +210,30 @@ def _pack_manifests():
 
 def test_pack_manifests():
     print("[pack manifests]")
+    schema_path = _ROOT / "packs" / "pack.schema.json"
+    check("pack JSON Schema exists", schema_path.is_file())
+    schema = json.loads(schema_path.read_text("utf-8"))
+    required = set(schema.get("required") or [])
+    check("schema requires version/dependencies/requires_tools",
+          {"version", "dependencies", "requires_tools"} <= required)
     packs = _pack_manifests()
     check("loaded pack manifests", len(packs) >= 10, detail=f"loaded {len(packs)}")
 
     for pid, (pj, data) in packs.items():
         check(f"{pid}: id matches directory", pid == pj.parent.name)
+        check(f"{pid}: semver version present", bool(re.match(r"^\d+\.\d+\.\d+", data.get("version", ""))))
+        check(f"{pid}: dependencies field present", isinstance(data.get("dependencies"), list))
+        check(f"{pid}: requires_tools field present", isinstance(data.get("requires_tools"), list))
+        if data.get("depends_on"):
+            check(
+                f"{pid}: dependencies matches depends_on compatibility alias",
+                sorted(data.get("dependencies") or []) == sorted(data.get("depends_on") or []),
+            )
+        for tool in data.get("requires_tools") or []:
+            check(f"{pid}: requires_tools item has name", isinstance(tool, dict) and bool(tool.get("name")))
         for srv in data.get("servers") or []:
             script = srv.get("script")
+            check(f"{pid}: server name has bio- prefix", str(srv.get("name", "")).startswith("bio-"))
             check(
                 f"{pid}: server script exists: {srv.get('name')}",
                 bool(script) and (_ROOT / script).is_file(),
@@ -179,7 +246,7 @@ def test_pack_manifests():
                 bool(src) and (_ROOT / src).is_dir(),
                 detail=str(src),
             )
-        for dep in data.get("depends_on") or []:
+        for dep in set((data.get("dependencies") or []) + (data.get("depends_on") or [])):
             check(f"{pid}: dependency exists: {dep}", dep in packs)
 
     cycles = []
@@ -193,7 +260,8 @@ def test_pack_manifests():
             cycles.append(" -> ".join(visiting[visiting.index(pid):] + [pid]))
             return
         visiting.append(pid)
-        for dep in packs[pid][1].get("depends_on") or []:
+        deps = set((packs[pid][1].get("dependencies") or []) + (packs[pid][1].get("depends_on") or []))
+        for dep in deps:
             if dep in packs:
                 dfs(dep)
         visiting.pop()
@@ -202,6 +270,9 @@ def test_pack_manifests():
     for pid in packs:
         dfs(pid)
     check("pack dependency graph has no cycles", not cycles, detail="; ".join(cycles))
+    check("bio-scfm formally depends on bio-singlecell", "bio-singlecell" in packs["bio-scfm"][1]["dependencies"])
+    check("bio-singlecell declares workflow engines",
+          {"Nextflow", "Snakemake"} <= {t["name"] for t in packs["bio-singlecell"][1]["requires_tools"]})
 
 
 def test_release_versions():
@@ -369,12 +440,66 @@ def test_grade_engine():
                                benefit_harm_balance={"rating": "favors_intervention", "reason": "可能获益"})
     check("EtD 低确定性强推荐被降级/警告",
           r2["strength"] == "conditional" or any("discordant" in w or "不一致" in w for w in r2["warnings"]))
+    body = {
+        "studies": [
+            {"study_id": "S1", "design": "rct", "n_participants": 100,
+             "risk_of_bias": {"overall": "low", "domains": {"randomization_process": "low"}}},
+            {"study_id": "S2", "design": "rct", "n_participants": 300,
+             "risk_of_bias": {"overall": "high", "domains": {"missing_outcome_data": "high"}}},
+        ]
+    }
+    rob = gr.grade_outcome(outcome="mortality", design="rct", domains={}, evidence_body=body)
+    check("evidence_body 自动聚合 study-level RoB",
+          rob["downgrade_detail"][0]["rating"] == "very_serious"
+          and rob["evidence_body_model"]["risk_of_bias"]["evidence"]["weighted_mean"] >= 1.5)
+    dossier = gr.grade_evidence_dossier(dossier={
+        "question": "Intervention X vs usual care",
+        "studies": body["studies"],
+        "outcomes": [
+            {"id": "mortality", "outcome": "Mortality", "criticality": "critical",
+             "domains": {"imprecision": {"rating": "serious", "reason": "wide CI"}},
+             "effect": {"measure": "RR", "value": 0.82, "ci_low": 0.51, "ci_high": 1.2}},
+            {"id": "infection", "outcome": "Infection", "criticality": "important", "domains": {}},
+        ],
+    })
+    check("GRADE dossier models shared body of evidence",
+          dossier["schema"] == "bio-audit/grade-evidence-dossier/1"
+          and dossier["body_of_evidence"]["n_studies"] == 2
+          and len(dossier["graded_outcomes"]) == 2)
+    check("GRADE dossier emits SoF markdown", "Mortality" in dossier["sof_markdown"] and "⊕" in dossier["sof_markdown"])
+    pr = gr.etd_probabilistic_recommendation(
+        certainty={"High": 0.2, "Moderate": 0.6, "Low": 0.2},
+        benefit_harm_balance={"probabilities": {"favors_intervention": 0.8, "balanced": 0.2}},
+        values_preferences={"probabilities": {"no_important_variability": 0.7, "important_variability": 0.3}},
+        resources={"rating": "negligible"},
+    )
+    check("probabilistic EtD returns posterior probabilities",
+          pr["posterior"]["direction"]["for"] >= 0.79 and "top_joint_states" in pr)
 
 
 def test_critique_engine():
     """bio-critique: extrapolation, methodology, believability, report, and text entry (offline)."""
     print("[bio-critique]")
     cr = _load_server("bio-critique/critique_server.py")
+    expected_tools = {
+        "critique_conclusion",
+        "critique_methodology",
+        "believability_score",
+        "find_conflicting_evidence",
+        "check_retraction_status",
+        "critique_full_report",
+        "design_counter_experiment",
+        "critique_text",
+    }
+    check("critique server registers all 8 planned tools", expected_tools <= set(cr.server.tools))
+    check(
+        "critique Phase 1 core tools registered",
+        {"critique_conclusion", "critique_methodology", "believability_score"} <= set(cr.server.tools),
+    )
+    check(
+        "critique Phase 2 conflict tools registered",
+        {"find_conflicting_evidence", "check_retraction_status"} <= set(cr.server.tools),
+    )
     claim = {
         "claim": "Drug X improves overall survival in patients.",
         "asserted": {"species": "human", "endpoint": "hard-clinical"},
@@ -419,6 +544,40 @@ def test_critique_engine():
         extrapolations=[{"rule_id": "EX-05"}],
     )
     check("EX-05 反证实验推荐硬终点 RCT", "随机" in rct_exp["design_type"] or "randomized" in rct_exp["design_type"].lower())
+
+    old_esearch, old_esummary = cr.entrez.esearch, cr.entrez.esummary
+    old_efetch, old_parse = cr.entrez.efetch_text, cr.entrez.parse_pubmed_xml
+    try:
+        cr.entrez.esearch = lambda db, query, retmax=10, sort=None: {
+            "ids": ["12345678"],
+            "query_translation": query,
+        }
+        cr.entrez.esummary = lambda db, ids: {
+            "12345678": {
+                "title": "No significant survival effect of EGFR inhibition",
+                "fulljournalname": "Journal of Negative Results",
+                "pubdate": "2025 Jan",
+            }
+        }
+        conflicts = cr.find_conflicting_evidence(
+            claim_text="EGFR inhibition improves survival.",
+            key_entities=["EGFR"],
+            current_refs=[{"id_type": "pmid", "id": "11111111"}],
+        )
+        check("find_conflicting_evidence returns retrieved PMID only", conflicts["potential_conflicts"][0]["pmid"] == "12345678")
+        check("find_conflicting_evidence records query strategy", "EGFR" in conflicts["search_strategy"]["query"])
+
+        cr.entrez.efetch_text = lambda db, ids, rettype="abstract", retmode="xml": "<xml/>"
+        cr.entrez.parse_pubmed_xml = lambda xml: [{
+            "pmid": "12345678",
+            "publication_types": ["Retracted Publication"],
+            "title": "Retracted test record",
+        }]
+        retract = cr.check_retraction_status(["12345678"])
+        check("check_retraction_status detects retracted publication", retract["results"][0]["status"] == "retracted")
+    finally:
+        cr.entrez.esearch, cr.entrez.esummary = old_esearch, old_esummary
+        cr.entrez.efetch_text, cr.entrez.parse_pubmed_xml = old_efetch, old_parse
 
     report = cr.critique_full_report({"claims": [claim]})
     check("批判报告包含外推", "外推" in report["markdown"])
@@ -493,6 +652,19 @@ def test_singlecell_recipe_expansion():
     sp = sc.sc_spatial_recipe(platform="visium")
     check("spatial 配方含 squidpy spatial neighbors", "spatial_neighbors" in sp["script"])
     check("spatial 先生成 leiden 再 neighborhood enrichment", "sc.tl.leiden" in sp["script"] and 'cluster_key="leiden"' in sp["script"])
+    wf = sc.sc_workflow_recipe(engine="snakemake", batch_method="scvi", annotation_method="celltypist")
+    check("Snakemake workflow package includes Snakefile and conda envs",
+          "Snakefile" in wf["files"] and "envs/scvi.yaml" in wf["files"])
+    check("Snakemake workflow wires scanpy/scrublet/scVI/celltypist",
+          all(x in wf["files"]["Snakefile"] for x in ("qc_scanpy", "doublet_scrublet", "batch_integrate", "annotate_celltypist")))
+    check("workflow declares actual single-cell toolchain",
+          {"scanpy", "scrublet", "scvi-tools", "celltypist"} <= {t["name"] for t in wf["toolchain"]})
+    nf = sc.sc_workflow_recipe(engine="nextflow", batch_method="harmony", include_scfm=True)
+    check("Nextflow workflow package includes main.nf",
+          "main.nf" in nf["files"] and "process QC_SCANPY" in nf["files"]["main.nf"])
+    check("Nextflow workflow exposes nf-core/scrnaseq handoff",
+          nf["nf_core_fastq_handoff"]["pipeline"] == "nf-core/scrnaseq"
+          and "nextflow run nf-core/scrnaseq" in nf["nf_core_fastq_handoff"]["command"])
 
 
 def test_sc_downstream_recipes():
@@ -517,7 +689,7 @@ def test_sc_downstream_recipes():
 
 
 def test_scfm_phase3_tools():
-    """scFM Phase 3：fine-tuning skeleton、quality metrics、CellFM/UCE prep（离线）。"""
+    """scFM Phase 3：fine-tuning skeleton、quality metrics、CellFM/UCE prep、benchmark gate（离线）。"""
     print("[bio-scfm phase3]")
     fm = _load_server("bio-scfm/scfm_server.py")
     ft = fm.scfm_finetune_plan(model="geneformer", label_key="cell_type")
@@ -527,6 +699,45 @@ def test_scfm_phase3_tools():
     check("embed quality 指标完整", {"kBET", "iLISI", "cLISI", "ARI"} <= set(q["metrics"]))
     ext = fm.scfm_preprocess_recipe_ext(model="uce", input_id_type="ensembl")
     check("UCE 预处理含 protein/ESM2", "ESM2" in ext["script"] and "protein" in ext["script"])
+    bp = fm.scfm_benchmark_plan(
+        task="rare_cell_detection",
+        models=["geneformer", "scvi"],
+        rare_population="KRT17+ epithelial state",
+        target_metric_value=0.30,
+        alpha_grid=[0.25, 0.5],
+    )
+    check("benchmark plan 含每模型 subagent 边界",
+          bp["subagent_boundaries"]["one_subagent_per_model"] is True and len(bp["model_jobs"]) == 2)
+    check("benchmark plan 含 SubagentStop 验证 hook",
+          any(h["event"] == "SubagentStop" and h["tool"] == "scfm_benchmark_verify" for h in bp["hooks"]))
+    good = {
+        "schema": "bio-scfm/benchmark-result/1",
+        "task": "rare_cell_detection",
+        "model": "geneformer",
+        "dataset": {
+            "anndata_sha256": "sha256:data",
+            "ground_truth_hash": "sha256:labels",
+            "label_source": "gmm_marker_threshold",
+            "split_hash": "sha256:split",
+            "split_strategy": "donor_stratified",
+            "positive_label": "KRT17_positive",
+        },
+        "run": {"seed": 0, "alpha": 0.5},
+        "metrics": {"auprc": {"value": 0.42, "ci_low": 0.34, "ci_high": 0.49, "n_bootstraps": 1000}},
+        "baseline": {"name": "scvi", "metrics": {"auprc": {"value": 0.31}}},
+        "audits": {"no_train_test_leakage": True, "class_balance_report": {"positive_fraction": 0.03},
+                   "ground_truth_threshold_blinded": True},
+        "provenance": {"embedding_provenance_hash": "sha256:embedding"},
+    }
+    gate = fm.scfm_benchmark_verify(result=good, target_metric_value=0.30)
+    check("benchmark verifier 合格结果 pass",
+          gate["hook_decision"] == "pass" and gate["goal_met"] is True and not gate["failures"])
+    bad = json.loads(json.dumps(good))
+    bad["audits"]["no_train_test_leakage"] = False
+    bad["metrics"]["auprc"]["ci_low"] = 0.18
+    gate2 = fm.scfm_benchmark_verify(result=bad, target_metric_value=0.30, attempts_used=1, max_attempts=3)
+    check("benchmark verifier 无效/未达标结果 retry",
+          gate2["hook_decision"] == "retry" and any("leakage" in f.lower() for f in gate2["failures"]))
 
 
 def test_sc_atlas_and_scanpy_generator():
@@ -564,6 +775,11 @@ def test_spatial_recipes():
           {r["platform"] for r in mx["platforms"]} == {"xenium", "visium_hd"})
     check("platform matrix has rare-cell guardrail",
           any("rare" in r.lower() and "marker" in r.lower() for r in mx["decision_rules"]))
+    mx2 = sp.spatial_platform_matrix(platforms=["Stereo-seq", "GeoMx"], tissue="heart", goal="atlas")
+    check("platform matrix normalizes Stereo-seq and GeoMx",
+          {r["platform"] for r in mx2["platforms"]} == {"stereo_seq", "geomx"})
+    check("platform matrix exposes advanced trend map",
+          {"ai_native_analysis", "spatial_multiomics", "whole_organ_4d_atlas"} <= set(mx2["trend_map"]))
 
     prep = sp.spatial_preprocess_recipe(platform="xenium", has_matched_histology=True)
     check("spatial preprocess recipe has stable hash", prep["recipe_hash"].startswith("sha256:"))
@@ -571,6 +787,9 @@ def test_spatial_recipes():
           "negative_probe_count" in prep["script"] and "segmentation_background_qc" in prep["script"])
     check("spatial preprocess builds squidpy graph",
           "spatial_neighbors" in prep["script"] and "nhood_enrichment" in prep["script"])
+    prep_roi = sp.spatial_preprocess_recipe(platform="geomx", has_matched_histology=True)
+    check("GeoMx preprocess audits ROI selection",
+          "roi_selection_qc" in prep_roi["script"] and "ROI selection audit" in " ".join(prep_roi["qc_checks"]))
 
     deconv = sp.spatial_deconvolution_recipe(platform="xenium", rare_cell_expected=True)
     check("rare-cell deconvolution auto uses marker_score baseline",
@@ -587,17 +806,143 @@ def test_spatial_recipes():
     fm_matrix = sp.spatial_scfm_model_matrix()
     check("spatial FM matrix includes scGPT-Spatial and Nicheformer",
           {"scgpt_spatial", "nicheformer"} <= set(fm_matrix["models"]))
+    check("spatial FM matrix includes histology-to-ST direction",
+          "histology_to_st" in fm_matrix["models"])
     fm = sp.spatial_scfm_plan(model="scgpt_spatial", platform="visium_hd")
     check("spatial FM plan is not-runnable skeleton",
           fm["runnable"] is False and "SystemExit" in fm["script"])
     check("spatial FM provenance requires baselines",
           "baseline" in fm["provenance_skeleton"] and "marker_or_deconvolution" in fm["provenance_skeleton"]["baseline"])
 
+    domain = sp.spatial_domain_recipe(platform="visium_hd")
+    check("spatial domain recipe covers SVG and domains",
+          "spatial_autocorr" in domain["script"] and "spatial_domains.tsv" in domain["script"])
+    check("spatial domain recipe names graph/model baselines",
+          any("SpaGCN" in x or "STAGATE" in x for x in domain["method_ladder"]))
+
+    comm = sp.spatial_communication_recipe(platform="xenium", celltype_key="cell_type")
+    check("spatial communication recipe builds adjacency-constrained plan",
+          "spatial_neighbors" in comm["script"] and "ligand-receptor" in " ".join(comm["guardrails"]))
+    check("spatial communication recipe has permutation controls",
+          any("shuffled coordinates" in x.lower() for x in comm["guardrails"]))
+
+    mm = sp.spatial_multimodal_recipe(modalities=["transcriptome", "protein", "ATAC", "histology"], platform="geomx")
+    check("spatial multiomics recipe covers protein/ATAC/histology",
+          {"protein", "atac", "histology"} <= set(mm["modality_plan"]))
+    check("spatial multiomics contract keeps same-slide provenance",
+          any("same-slide" in x.lower() for x in mm["integration_contract"]))
+
+    hist = sp.spatial_histology_prediction_plan(task_type="biomarker_prediction", platform="visium_hd")
+    check("histology-to-ST plan is not runnable and leakage-aware",
+          hist["runnable"] is False and "SKELETON" in hist["script"] and any("leakage" in x.lower() for x in hist["validation_contract"]))
+
+    atlas = sp.spatial_atlas_3d_recipe(timepoint_key="disease_stage", z_step_um=10.0)
+    check("3D atlas recipe creates registered 3D coordinates",
+          "spatial_3d_registered" in atlas["script"] and "disease stage" in " ".join(atlas["atlas_contract"]))
+
+    gate = sp.spatial_translation_readiness_gate(use_case="diagnostic_biomarker", platform="xenium")
+    check("translation readiness gate blocks under-validated diagnostic claims",
+          gate["verdict"] == "not_ready_for_claim_scope" and "orthogonal_validation" in gate["missing"])
+
     ipf = sp.ipf_krt17_spatial_validation_recipe()
     check("IPF/KRT17 recipe has KRT17 and SPP1 arms",
           "KRT17" in " ".join(ipf["params"]["epithelial_markers"]) and "SPP1" in " ".join(ipf["params"]["niche_markers"]))
     check("IPF/KRT17 report contract avoids mechanism overclaim",
           any("hypothesis" in x.lower() for x in ipf["reporting_contract"]))
+
+
+def test_bio_ml_recipes():
+    """bio-ml: biomedical ML strategy, validation gates and breakthrough recipes (offline)."""
+    print("[bio-ml recipes]")
+    ml = _load_server("bio-ml/ml_server.py")
+    cap = ml.biomedical_ml_capability_map()
+    check("capability map includes virtual-cell frontier",
+          "single_cell_spatial_and_virtual_cells" in cap["domains"])
+    check("capability map recommends validation gate",
+          "biomedical_ml_validation_gate" in cap["recommended_tools"])
+
+    study = ml.ml_study_design_recipe(
+        task_type="classification",
+        data_modalities=["histology", "ehr"],
+        claim_scope="clinical_decision_support",
+        n_sites=1,
+        sensitive_data=True,
+    )
+    check("study recipe has stable hash", study["recipe_hash"].startswith("sha256:"))
+    check("study recipe blocks tile/patient leakage",
+          any("patient" in r.lower() and "tile" in r.lower() for r in study["split_strategy"]))
+    check("study skeleton is guarded",
+          "SKELETON" in study["script"] and "SystemExit" in study["script"])
+    check("sensitive study routes privacy", any("bio-privacy" in s or "PHI" in s for s in study["privacy_and_governance"]))
+
+    mm = ml.multimodal_foundation_model_plan(
+        modalities=["single_cell", "spatial", "histology"],
+        claim_scope="translational",
+        n_sites=2,
+    )
+    check("multimodal FM plan is non-runnable skeleton",
+          mm["runnable"] is False and "SystemExit" in mm["script"])
+    check("multimodal FM requires fusion baseline",
+          any(row["modality"] == "fusion" for row in mm["baseline_matrix"]))
+    check("multimodal FM hands off to scFM and spatial",
+          "bio-scfm" in " ".join(mm["handoffs"]) and "bio-spatial" in " ".join(mm["handoffs"]))
+
+    fed = ml.federated_learning_recipe(
+        num_sites=3,
+        interoperability_standard="FHIR",
+        privacy_mode="differential_privacy",
+    )
+    check("federated recipe records DP budget field",
+          fed["provenance_skeleton"]["privacy"]["dp_epsilon"] == "<FILL if used>")
+    check("federated recipe keeps site-level metrics",
+          "site-level metrics" in " ".join(fed["site_contract"]))
+
+    vc = ml.virtual_cell_perturbation_plan(
+        perturbation_type="compound",
+        model_family="multimodal_fm",
+        use_spatial_context=True,
+    )
+    check("virtual-cell plan requires held-out perturbation controls",
+          any("held out" in x.lower() or "hold out" in x.lower() for x in vc["experimental_design"]))
+    check("virtual-cell spatial handoff present",
+          any("bio-spatial" in h for h in vc["handoffs"]))
+
+    drug = ml.ai_drug_discovery_ml_plan(
+        discovery_goal="small_molecule_generation",
+        disease="glioblastoma",
+        target="EGFR",
+        structure_available=True,
+    )
+    check("drug discovery plan includes ADMET and structure gates",
+          any("ADMET" in g for g in drug["stage_gates"]) and any("structure" in g.lower() for g in drug["stage_gates"]))
+    check("drug discovery warns against docking-only claims",
+          any("Docking score" in w for w in drug["warnings"]))
+
+    gate = ml.biomedical_ml_validation_gate(claim_scope="diagnostic_device", n_sites=1)
+    check("diagnostic gate blocks under-validated ML",
+          gate["verdict"] == "not_ready_for_claim_scope" and "multi_site_external_validation" in gate["missing"])
+    gate_ok = ml.biomedical_ml_validation_gate(
+        claim_scope="diagnostic_device",
+        n_sites=3,
+        has_locked_provenance=True,
+        has_leakage_audit=True,
+        has_baseline_model=True,
+        has_external_validation=True,
+        has_calibration=True,
+        has_subgroup_bias_audit=True,
+        has_interpretability_or_rationale=True,
+        has_prospective_or_silent_evaluation=True,
+        has_drift_monitoring=True,
+        has_locked_test_set_and_prespecified_endpoint=True,
+    )
+    check("diagnostic gate passes fully validated ML",
+          gate_ok["verdict"] == "ready_for_claim_scope" and not gate_ok["missing"])
+
+    lab = ml.self_driving_lab_plan(autonomy_mode="human_approved_closed_loop", max_iterations=2)
+    check("self-driving lab plan keeps human approval",
+          any("human approval" in x.lower() for x in lab["loop_contract"]))
+    check("self-driving lab skeleton is guarded",
+          "SystemExit" in lab["script"] and len(lab["provenance_skeleton"]["iterations"]) == 2)
 
 
 def test_privacy_partial_leak():
@@ -616,6 +961,7 @@ def test_privacy_partial_leak():
 
 def main() -> int:
     test_fixtures()
+    test_mcp_helpers()
     test_pack_manifests()
     test_release_versions()
     test_tool_executor()
@@ -634,6 +980,7 @@ def main() -> int:
     test_scfm_phase3_tools()
     test_sc_atlas_and_scanpy_generator()
     test_spatial_recipes()
+    test_bio_ml_recipes()
     test_privacy_partial_leak()
     print()
     if _fails:

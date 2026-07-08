@@ -23,11 +23,13 @@ packs/
   bio-scfm/             # Geneformer / scGPT 计算工具适配层 + embedding provenance
   bio-sc-downstream/    # 单细胞下游分析配方（DEG / trajectory / communication / marker / enrichment）
   bio-sc-atlas/         # CELLxGENE Census / Discover 轻量检索与下载 skeleton
+  bio-spatial/          # 空间转录组 / H&E-to-ST / 3D atlas / spatial foundation model recipe
+  bio-ml/               # 生物医学机器学习战略层：多模态 FM / virtual cell / federated / validation gate
 
   <pack>/pack.json      # 每个 pack 的 manifest
 ```
 
-`pack.json` schema：
+`pack.json` schema 由 [`packs/pack.schema.json`](../packs/pack.schema.json) 固化；桌面端加载时会做轻量校验，坏 manifest 不再静默进入列表。
 
 ```json
 {
@@ -35,11 +37,16 @@ packs/
   "name": "生物医学文献检索",
   "description": "…",
   "version": "0.1.0",
+  "dependencies": ["bio-lit"],              // 硬依赖；启用当前 pack 时会自动启用依赖并按拓扑顺序装配
+  "requires_tools": [                       // 对用户透明声明运行/生成脚本所需工具
+    {"name": "python3", "kind": "runtime", "required": true, "purpose": "Run local MCP servers"},
+    {"name": "Snakemake", "kind": "workflow", "required": false, "purpose": "Generated workflow package"}
+  ],
   "requires_env": [],                      // 必填环境变量；缺则 UI 显示"缺 X"、跳过装配
   "optional_env": [                        // 可选环境变量；UI 里给输入框
     {"name": "NCBI_API_KEY", "label": "…", "url": "https://…"}
   ],
-  "depends_on": ["bio-lit"],               // 建议一起启用的兄弟 pack（UI 只 chip 提示，不硬拦）
+  "depends_on": ["bio-lit"],               // deprecated 兼容别名；新 pack 请用 dependencies
   "servers": [
     {"name": "bio-lit-pubmed",             // MCP server 名。**必须以 `bio-` 前缀**，
      "script": "packs/bio-lit/pubmed_server.py",  // 后端凭前缀识别本项目管理的 server
@@ -78,7 +85,7 @@ packs/
 2. 每个 server 一个 Python 文件，`#!/usr/bin/env python3`，`if __name__ == "__main__": server.run()`。
 3. tool 定义用 `@server.tool(name, description, input_schema)` 装饰；返回 str / list（MCP content） / 任意可 JSON 化对象。
 4. 若需要 Skill，写 `SKILL.md`（必须首行是 `---` frontmatter 段，含 `name:` `description:`），放在 `pack/skills/<skill-id>/SKILL.md`。
-5. 不需要在任何地方注册 pack —— `packs::list_packs` 会自动扫 `packs/*/pack.json`。
+5. 不需要在任何地方硬编码注册 pack —— `packs::list_packs` 会发现 `packs/*/pack.json`，按 schema 校验，解析 `dependencies`，再按依赖拓扑顺序装配。校验失败会在 stderr 打出原因。
 
 ## 实体标准化（bio-norm）
 
@@ -201,20 +208,21 @@ python test/bio_eval/run.py --summary     # 汇总所有 profile 历史
 
 证据类型（RCT / cohort）只是**起点**。顶级医学（Cochrane / WHO / 指南）要回答的是：**对这个具体 outcome，我们对效应估计的把握有多高、为什么**——这就是 GRADE。第二个 server `bio-audit-grade` 把 GRADE 做成确定性引擎：
 
-- `grade_outcome` —— 起始档由设计定（RCT→High(4) / 观察性→Low(2) / 病例系列→Very Low(1)）；模型对 5 个降级域（偏倚风险 / 不一致性 / 间接性 / 不精确性 / 发表偏倚）+ 3 个升级域（大效应 / 剂量反应 / 残余混杂只会削弱）给出 serious/very serious 判断**与理由**；工具把算术锁死，输出四档确定性 ⊕⊕⊕⊕/⊕⊕⊕⊝/⊕⊕⊝⊝/⊕⊝⊝⊝ + 逐域「为什么」+ **规则守卫**（RCT 不可升级、无理由降级告警、样本 <300 提示考虑不精确性）。
+- `grade_outcome` —— 起始档由设计定（RCT→High(4) / 观察性→Low(2) / 病例系列→Very Low(1)）；传入 `evidence_body.studies` 时会按 study-level 设计组成估计证据体起始档，并把 RoB 2 风格的 study/outcome 偏倚判断按样本量加权汇总为 GRADE `risk_of_bias` 降级域。模型对 5 个降级域（偏倚风险 / 不一致性 / 间接性 / 不精确性 / 发表偏倚）+ 3 个升级域（大效应 / 剂量反应 / 残余混杂只会削弱）给出 serious/very serious 判断**与理由**；工具把算术锁死，输出四档确定性 ⊕⊕⊕⊕/⊕⊕⊕⊝/⊕⊕⊝⊝/⊕⊝⊝⊝ + 逐域「为什么」+ **规则守卫**。
+- `grade_evidence_dossier` —— 接收结构化证据档案：PICO/question、共享 included studies、RoB 2-style risk-of-bias 记录、多个 critical/important outcomes。输出 GRADEpro-like evidence profile、每个 outcome 的评级、证据体模型与 SoF Markdown。
 - `grade_sof_table` —— 跨 outcome 汇成 Summary of Findings 表（结局 · 参与者(研究数) · 效应量 · 确定性 · 关键降级理由）。`grade_explain` 给域定义速查。
 
 分工与 bio-audit 一贯：**工具定死算术、模型给判断**——模型无法含糊说"中等确定性"，必须逐域声明为什么，工具把算错/规则违背暴露出来。配 `grade-sof` skill。确定性驱动措辞：High→"能降低"，Low→"可能降低"，Very Low→"证据极不确定"。
 
 **起始档拆清（易错点）**：meta-analysis / systematic-review **不默认 High**——起始档取决于纳入研究设计（`underlying_design=rct`→High，`observational`→Low），未声明保守按 Low + 警告。`clinical-trial` 是模糊词，必须拆成 `rct`（High）vs `single-arm-trial` / `non-randomized-trial`（Low，按观察性、可升级）。
 
-**EtD 层（`etd_recommendation`）**：确定性 ≠ 推荐。要不要推荐、多强（strong / conditional），还要看获益/危害平衡、价值观与偏好、资源/成本、公平性/可接受性/可行性。工具把这些判断确定性地映射成推荐方向（for/against）+ 强度，守卫"低确定性上的强推荐"（属 GRADE 不一致推荐，需符合 5 类特殊情形否则降 conditional），措辞遵循 GRADE 惯例：strong→"we recommend"，conditional→"we suggest"。
+**EtD 层（`etd_recommendation` / `etd_probabilistic_recommendation`）**：确定性 ≠ 推荐。要不要推荐、多强（strong / conditional），还要看获益/危害平衡、价值观与偏好、资源/成本、公平性/可接受性/可行性。确定性接口保留原来的守卫；概率接口可接收每个维度的分布，枚举联合状态，返回推荐方向/强度的 posterior probability，避免把分歧 panel 判断硬塞进一棵 if-else 树。
 
 ## 单细胞分析适配层（bio-singlecell + bio-scfm + bio-sc-downstream + bio-sc-atlas）
 
 把 Geneformer / scGPT 当**计算工具**（表达谱→embedding 的编码器）用，不是当聊天模型。核心铁律：**任何 embedding 必须可复现**，输入输出全程记 provenance。哲学同 generators——工具产出「可复现脚本 + provenance 记录」，重活（GPU 上跑模型）在用户机器上，中间对象落用户磁盘。
 
-- **bio-singlecell**（喂数据前的标准化 + 追溯层）：`anndata_fingerprint`（元数据指纹 + 生成算真·内容哈希的本地代码片段；同一份数据在任何机器上指纹一致）、`sc_preprocess_recipe`（模型对口的确定性 scanpy 配方 + `recipe_hash` + 脚本——Geneformer 走 rank-value 跳过 log/HVG，scGPT 走 HVG+value binning）、`sc_qc_thresholds`（MAD-based 可解释阈值），以及 `sc_doublet_recipe` / `sc_batch_recipe` / `sc_geneid_convert` / `sc_celltype_recipe` / `sc_multimodal_recipe` / `sc_spatial_recipe`。
+- **bio-singlecell**（喂数据前的标准化 + 追溯层）：`anndata_fingerprint`（元数据指纹 + 生成算真·内容哈希的本地代码片段；同一份数据在任何机器上指纹一致）、`sc_preprocess_recipe`（模型对口的确定性 scanpy 配方 + `recipe_hash` + 脚本——Geneformer 走 rank-value 跳过 log/HVG，scGPT 走 HVG+value binning）、`sc_qc_thresholds`（MAD-based 可解释阈值），以及 `sc_doublet_recipe` / `sc_batch_recipe` / `sc_geneid_convert` / `sc_celltype_recipe` / `sc_multimodal_recipe` / `sc_spatial_recipe`。`sc_workflow_recipe` 进一步输出 Snakemake 或 Nextflow 文件包，把 scanpy、Scrublet、scVI/Harmony、CellTypist/SingleR 和 Geneformer/scGPT adapter 作为真实工作流步骤串起来；raw FASTQ 场景给 `nf-core/scrnaseq` handoff。
 - **bio-scfm**（编码器适配）：`scfm_registry` / `scfm_model_matrix`（模型矩阵）、`scfm_embed_plan`（产出 embedding **skeleton**：`runnable=false`、脚本带 NOT-RUNNABLE 横幅 + `raise SystemExit` 护栏 + TODO/伪代码——**不是可直接运行的脚本**）、`scfm_finetune_plan`（Geneformer/scGPT fine-tuning skeleton）、`scfm_embed_quality`（kBET/iLISI/cLISI/silhouette/NMI/ARI/scIB 配方）、`scfm_preprocess_recipe_ext`（CellFM/UCE 专用预处理）、`scfm_provenance_record` / `scfm_provenance_verify`。
 - **bio-sc-downstream**（embedding/注释之后的分析配方）：`sc_deg_recipe`（pseudobulk DESeq2 / Wilcoxon / MAST）、`sc_trajectory_recipe`（scVelo / PAGA / DPT / Monocle3）、`sc_communication_recipe`（CellChat / LIANA / NicheNet）、`sc_marker_recipe`、`sc_enrichment_recipe`。它依赖 `bio-singlecell`，但单独成 pack，便于用户按需启用。
 - **bio-sc-atlas**（轻量图谱检索）：`cellxgene_search` / `cellxgene_dataset_info` / `cellxgene_download_recipe`。默认只做元数据计划和下载 skeleton，不把 `cellxgene-census` SDK 作为 pack 运行依赖。
@@ -222,3 +230,20 @@ python test/bio_eval/run.py --summary     # 汇总所有 profile 历史
 **模型矩阵**：4 个预训练 **foundation model**（Geneformer / scGPT / CellFM / UCE）+ 3 个 **domain-specific baseline**（scVI / totalVI / MultiVI，每份数据自训 VAE，非预训练）。保留 baseline 是为**诚实对照**——跑 foundation model 时至少配一个 baseline，否则无法判断 foundation 的 embedding 是不是真比自训 VAE 强。各模型标 `category` / 输入 ID 类型 / 模态（totalVI=RNA+ADT，MultiVI=RNA+ATAC）。
 
 provenance 五件套缺一不可：**输入 AnnData 内容哈希 · 预处理参数哈希 · 模型版本/checkpoint · embedding 维度/输出哈希/pooling · seed/环境**。`_lib/provenance.py` 提供规范化 JSON + sha256，任何记录第三方都能重算验真、篡改必被检出。配 `single-cell-prep` / `scfm-embed` 两个 skill。**绝不在对话里"假装"跑了模型下结论**，也**绝不把 skeleton 当 runnable 脚本**——那是把计算工具误当聊天模型。
+
+## 机器学习突破板块（bio-ml）
+
+`bio-ml` 把“机器学习用于医学与生物学”的前沿方向落成 BioCSSwitch 的 recipe 层：**多模态基础模型、虚拟细胞/扰动预测、AI 药物发现、联邦/隐私保护训练、临床 ML 验证门、自驱实验室**。它不是一个“在 MCP 里训练模型”的包；和 scFM/spatial 一样，只生成可复现 study design、不可误跑 skeleton、provenance 骨架和 claim-scope gate。
+
+核心工具：
+
+- `biomedical_ml_capability_map`：把医学影像、单细胞/空间、药物发现、EHR/digital twin、联邦学习、自驱实验室等方向映射到 BioCSSwitch 的 pack 能力和失败模式。
+- `ml_study_design_recipe`：生成 ML 研究设计配方，强制 patient/donor/site/slide/perturbation 级切分、baseline、指标、校准、偏倚审计与 provenance。
+- `multimodal_foundation_model_plan`：为 omics / single-cell / spatial / histology / radiology / EHR / structure / chemistry 多模态模型生成 encoder/fusion/ablation/baseline skeleton。
+- `virtual_cell_perturbation_plan`：为 CRISPR、compound、cytokine、variant 等扰动预测生成 held-out perturbation、negative control、scFM/spatial handoff 和验证合同。
+- `ai_drug_discovery_ml_plan`：把 target evidence、molecule/protein generation、structure/docking、ADMET、安全性和 orthogonal assay 拆成 staged go/no-go gates。
+- `federated_learning_recipe`：为 FHIR/OMOP/AnnData 等多机构数据生成 federated / secure aggregation / differential privacy 协议骨架。
+- `biomedical_ml_validation_gate`：在写结论前卡住 claim scope；没有外部验证、泄漏审计、校准、subgroup bias、prospective/silent eval 等，就不能写 clinical/diagnostic 语言。
+- `self_driving_lab_plan`：自驱实验室只作为 human-in-the-loop 闭环 study plan，保留 assay QC、stopping rules、人类审批和失败实验 ledger。
+
+配套 Skill：`biomedical-ml-strategy`。触发 ML 战略、虚拟细胞、多模态医学 AI、AI drug discovery、federated learning、digital twin 或 self-driving lab 问题时，先调 capability map，再按任务调 recipe，最后用 `biomedical_ml_validation_gate` 决定能说到什么证据强度。与 `bio-privacy`、`bio-audit`、`bio-scfm`、`bio-spatial`、`bio-drug` 是互补关系：**前者管 ML 研究设计和验证边界，后者管具体数据域/证据域工具**。
