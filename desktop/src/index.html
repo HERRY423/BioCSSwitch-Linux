@@ -11,9 +11,42 @@
     <div class="panel">
       <div class="hd" data-tauri-drag-region>
         <div class="brand" data-tauri-drag-region><span id="brandDot" class="dot amber"></span>BioCSSwitch</div>
-        <div class="gear" id="quitBtn" title="退出 BioCSSwitch">退出</div>
+        <div class="header-actions">
+          <button class="linkbtn gear" id="settingsBtn" type="button">设置</button>
+          <button class="linkbtn gear" id="quitBtn" type="button" title="退出 BioCSSwitch">退出</button>
+        </div>
       </div>
 
+      <main class="research-home" id="researchHome" aria-labelledby="researchHeading">
+        <div class="research-hero">
+          <p class="eyebrow">AI BIOMEDICAL RESEARCH PLATFORM</p>
+          <h1 id="researchHeading">从问题到可审计证据</h1>
+          <p>选择研究任务。BioCSSwitch 会准备相应的本地工具、证据规则和研究工作区。</p>
+        </div>
+        <section class="workflow-grid" aria-label="研究工作流">
+          <button class="workflow-card" type="button" data-workflow="lit-review" data-packs="bio-workflows,bio-audit">
+            <span class="workflow-icon">⌕</span><span class="workflow-title">我要做文献综述</span>
+            <span class="workflow-copy">检索、证据审计与 GRADE/SoF 汇总</span><span class="workflow-arrow">启动 →</span>
+          </button>
+          <button class="workflow-card" type="button" data-workflow="omics-code" data-packs="bio-singlecell,bio-sc-downstream,bio-scfm">
+            <span class="workflow-icon">◌</span><span class="workflow-title">我要分析单细胞数据</span>
+            <span class="workflow-copy">QC、注释、差异分析与可复现 recipe</span><span class="workflow-arrow">启动 →</span>
+          </button>
+          <button class="workflow-card" type="button" data-workflow="experimental-design" data-packs="bio-experiment">
+            <span class="workflow-icon">⌁</span><span class="workflow-title">我要设计实验方案</span>
+            <span class="workflow-copy">反证、区分性实验与关键数据需求</span><span class="workflow-arrow">启动 →</span>
+          </button>
+          <button class="workflow-card" type="button" data-workflow="crossmodal-discovery" data-packs="bio-crossmodal">
+            <span class="workflow-icon">◈</span><span class="workflow-title">我要发现和排序靶点</span>
+            <span class="workflow-copy">整合文献、组学、药物与临床试验信号</span><span class="workflow-arrow">启动 →</span>
+          </button>
+        </section>
+        <div class="research-status" id="researchStatus" role="status" aria-live="polite">模型连接与高级配置位于“设置”。</div>
+        <p class="research-note">所有研究输出均应由研究者复核；平台将证据来源、冲突与不确定性显式呈现。</p>
+      </main>
+
+      <div id="settingsPage" hidden>
+      <div class="settings-title"><button class="linkbtn back-btn" id="homeBtn" type="button">← 研究工作台</button><span>连接与设置</span></div>
       <div class="sec modeseg">
         <div class="seg" id="modeSeg">
           <button type="button" class="seg-btn active" data-mode="proxy">第三方模型</button>
@@ -197,6 +230,7 @@ ollama.local"></textarea>
       <div class="foot foot2 list-only">
         <span><button type="button" class="link linkbtn" id="doctorBtn">自检</button> · <button type="button" class="link linkbtn" id="logsBtn">日志</button></span>
         <span><button type="button" class="link linkbtn" id="updateBtn">检查更新</button> · <span id="verLabel"></span></span>
+      </div>
       </div>
     </div>
   </body>

@@ -1024,11 +1024,58 @@ async function refreshStatus() {
   }
 }
 
+function setResearchStatus(text, kind) {
+  const el = els.researchStatus;
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "research-status" + (kind ? " " + kind : "");
+}
+
+function showSettings() {
+  if (els.researchHome) els.researchHome.hidden = true;
+  if (els.settingsPage) els.settingsPage.hidden = false;
+}
+
+function showResearchHome() {
+  showView("list");
+  if (els.settingsPage) els.settingsPage.hidden = true;
+  if (els.researchHome) els.researchHome.hidden = false;
+}
+
+async function launchWorkflow(button) {
+  const task = button.dataset.workflow;
+  const packs = (button.dataset.packs || "").split(",").filter(Boolean);
+  if (!state.active_id) {
+    setResearchStatus("先在“设置”中添加并激活一个模型连接；完成后即可一键启动工作流。", "err");
+    showSettings();
+    return;
+  }
+  const cards = [...document.querySelectorAll("[data-workflow]")];
+  cards.forEach((card) => (card.disabled = true));
+  setResearchStatus("正在准备研究工具与证据规则…");
+  try {
+    await call("set_task_route", { task, profileId: state.active_id });
+    for (const id of packs) {
+      if (!(_packState && _packState.enabled && _packState.enabled[id])) {
+        await call("toggle_pack", { id, enabled: true });
+      }
+    }
+    await loadPacks();
+    const r = await call("one_click_login");
+    setResearchStatus(`${button.querySelector(".workflow-title").textContent}已就绪。${r.msg || "研究工作区已打开。"}`, "ok");
+    await refreshStatus();
+  } catch (e) {
+    setResearchStatus("启动失败：" + e, "err");
+  } finally {
+    cards.forEach((card) => (card.disabled = false));
+  }
+}
+
 function wire() {
   [
     "oneClickBtn", "stopBtn", "ltProxy", "ltSandbox", "ltUpstream",
     "msg", "brandDot", "openBrowserBtn", "doctorBtn", "updateBtn", "verLabel",
-    "reportBtn", "logsBtn", "quitBtn", "modeSeg", "proxyPort", "sandboxPort", "advSec",
+    "reportBtn", "logsBtn", "quitBtn", "settingsBtn", "homeBtn", "researchHome", "settingsPage", "researchStatus", "modeSeg", "proxyPort", "sandboxPort", "advSec",
     "listSec", "profileList", "newBtn", "skipActivateBtn",
     "wizSec", "wizTemplate", "wizTemplateChips", "wizTplLabel", "wizTplHint", "wizName", "wizBase", "wizBaseHint",
     "wizFetchBtn", "wizModelInfo", "wizModel", "wizModelHint", "wizKey", "wizSaveBtn", "wizCancelBtn",
@@ -1097,6 +1144,11 @@ function wire() {
     call("open_logs").catch((e) => setMsg("打开日志失败：" + e, "err"))
   );
   els.quitBtn.addEventListener("click", () => call("quit_app").catch(() => {}));
+  els.settingsBtn.addEventListener("click", showSettings);
+  els.homeBtn.addEventListener("click", showResearchHome);
+  document.querySelectorAll("[data-workflow]").forEach((card) =>
+    card.addEventListener("click", () => launchWorkflow(card))
+  );
 }
 
 // ═══════════════════════ 科研工具包 / 隐私 / 任务路由（bio-* 扩展）═══════════════════════

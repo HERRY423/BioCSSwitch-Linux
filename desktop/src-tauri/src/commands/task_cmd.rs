@@ -188,15 +188,23 @@ fn run_probes(
             let script = root.join("proxy/csswitch_proxy.py");
             let adapter = templates::adapter_for(&profile.template_id);
             let key_env = key_env_for_adapter(adapter);
+            let relay_thinking = templates::thinking_policy_for(&profile.template_id);
             let target = scratch::ScratchTarget {
                 provider: adapter,
                 key_env,
                 base_url: &profile.base_url,
                 key: &profile.api_key,
-                model: if profile.model.is_empty() { None } else { Some(profile.model.as_str()) },
+                model: if profile.model.is_empty() {
+                    None
+                } else {
+                    Some(profile.model.as_str())
+                },
+                relay_thinking,
             };
             let r = scratch::scratch_probe(
-                &py, &script, &target,
+                &py,
+                &script,
+                &target,
                 scratch::ProbeKind::CustomPost(payload.to_vec(), true),
             );
             (r.status, r.body)

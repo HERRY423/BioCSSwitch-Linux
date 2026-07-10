@@ -8,23 +8,26 @@
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-C25A34.svg" alt="Tauri 2">
 </p>
 
-# BioCSSwitch
+# BioCSSwitch — AI 生物医学研究平台
 
-CSSwitch 是一个给 Claude Science 使用的本地模型切换器。它把 Science 的推理请求接到你自己的第三方模型 API 上，让没有 Claude 订阅的用户也能在 Science 里使用 DeepSeek、通义千问、Kimi、MiniMax、GLM、OpenRouter、中转站或自定义兼容端点。
+BioCSSwitch 将 AI 研究工作流、可审计证据和本地生物医学工具整合到一个研究工作区。打开应用后，研究者先选择要完成的工作，而不是先挑模型：
 
-BioCSSwitch 是面向生物医学研究场景的 CSSwitch 分支。它基于上游 CSSwitch v0.3.6 的多 provider / 真实模型名显示能力，额外加入本地 biomedical MCP/Skill packs、证据审计、隐私红队、单细胞分析、空间组学、scFM 与生物医学 ML 工作流。
+- **我要做文献综述**：多源检索、声明级引用核验、GRADE/SoF 与五段不确定性台账。
+- **我要分析单细胞数据**：QC、注释、差异分析、轨迹与细胞通讯的可复现 recipe。
+- **我要设计实验方案**：竞争假设、区分性实验、对照与关键数据需求。
+- **我要发现和排序靶点**：统一编排文献、基因、药物、临床试验、单细胞与空间证据。
 
-它让你不必订阅 Claude，也能在 Science 中使用自己的第三方模型。填入 API Key，选择服务商，剩下的交给 BioCSSwitch。简单来说，它之于 Claude Science，就像 CC Switch 之于 Claude Code；但默认工具包更偏向文献、临床试验、药物靶点、组学和单细胞研究。
+模型连接是支持上述研究的基础设置，而非产品中心。BioCSSwitch 可在本地管理兼容模型服务，并按任务装配 MCP/Skill 工具包、任务路由和证据规则；研究结论始终需要由研究者复核。
 
 > 当前版本主要支持 macOS Apple Silicon。首次打开未公证的 `.dmg` 应用时，macOS 可能需要你右键选择「打开」。
 
-[下载最新版](../../releases/latest) · [更新日志](./CHANGELOG.md) · [报告问题](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml) · [功能建议](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)
+[研究平台介绍与示例输出](./docs/index.html) · [下载最新版](../../releases/latest) · [更新日志](./CHANGELOG.md) · [报告问题](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml) · [功能建议](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)
 
 BioCSSwitch 会把这个地址指向本地代理。代理收到请求后，会移除 Science 附带的 OAuth 信息，换成你的第三方 API Key；如果服务商使用不同的接口格式，代理还会负责协议转换，最后把请求发给你选择的模型。
 
 Science 启动所需的登录状态则由 BioCSSwitch 在隔离环境中生成。这套本地登录只负责让 Science 启动，不参与后续推理，也不会接触你真实的 Claude 登录信息。
 
-## 为什么需要 CSSwitch
+## 研究平台与本地运行时
 
 Claude Science 是 Anthropic 面向科研与分析场景的 AI Agent 应用，可以做文献分析、数据处理、代码执行、图表生成和论文写作等工作。但 Science 默认依赖 Claude 登录和 Anthropic 推理服务。
 
@@ -44,7 +47,7 @@ Claude Science sandbox
   -> DeepSeek / Qwen / Kimi / MiniMax / GLM / OpenRouter / custom endpoint
 ```
 
-## 可以做什么
+## 平台能力
 
 BioCSSwitch 继承自 [SuperJJ007/CSSwitch](https://github.com/SuperJJ007/CSSwitch)，CSSwitch 的名字和产品形态参考了 [CC Switch](https://github.com/farion1231/cc-switch)，后者是一款使用 Tauri 和 Rust 开发的 Claude Code API 服务商切换工具。BioCSSwitch 与这些项目彼此独立，不存在从属或背书关系。
 
@@ -55,7 +58,7 @@ BioCSSwitch 继承自 [SuperJJ007/CSSwitch](https://github.com/SuperJJ007/CSSwit
 - Science 顶部模型选择器会显示你选择的真实模型名，而不是笼统的 `claude` 或 `opus`。
 - 可以一键切回「官方 Claude」模式，不干扰你的真实 Claude 登录。
 
-**给进阶用户**
+**研究工作流与可复核输出**
 
 - **装好就能用**：新建一条第三方配置、填入 API Key、设为当前，点击「一键开始」，BioCSSwitch 会自动启动代理和隔离环境，并打开已经完成本地登录的 Science。虚拟登录由 Rust 原生实现，不需要另外安装 Node.js。
 - **重复点击也不会打乱状态**：「一键开始」会先检查当前运行状态。窗口关了就重新打开，代理停了就重启代理，隔离环境没启动就补上。它不会反复生成登录身份，也不会把正在使用的会话切换到其他组织。发现连接异常时，还会先检查并尝试自动恢复。

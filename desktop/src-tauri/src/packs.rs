@@ -615,6 +615,7 @@ pub fn purge_bio_from_mcp(asset_root: &Path, sandbox_data_dir: &Path) -> io::Res
 /// 每项：(task_id, 中文显示名, 一句描述 / 关键能力需求)
 pub const BIOMED_TASKS: &[(&str, &str, &str)] = &[
     ("research-partner",   "主动研究伙伴",         "本地兴趣建模、个性化更新简报与工作流预测；隐私优先"),
+    ("experimental-design", "实验方案设计",         "从可证伪假设到区分性实验、对照与关键数据需求"),
     ("hypothesis-generation", "矛盾驱动假设生成",  "从相反证据生成竞争假设、区分性实验和关键数据需求"),
     ("crossmodal-discovery", "跨模态靶点发现",     "文献、基因、药物、试验、单细胞与空间证据统一编排"),
     ("lit-review",       "文献综述",             "搜索 + 综合 + 证据分级；长上下文优先"),

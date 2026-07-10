@@ -13,15 +13,20 @@
   <a href="./README.en.md">English</a>
 </p>
 
-# CSSwitch
+# BioCSSwitch — AI biomedical research platform
 
-CSSwitch is a local model switcher for Claude Science. It routes Science inference requests to your own third-party model API, so you can use DeepSeek, Qwen, Kimi, MiniMax, GLM, OpenRouter, relay providers, or custom compatible endpoints inside Science without a Claude subscription.
+BioCSSwitch starts from a research goal, then prepares the local tools, evidence rules, and research workspace needed to pursue it. It is not presented as a model switcher: model connectivity is a setting that supports the research workflow.
 
-It is built for more than developers. You need Claude Science, a third-party API key, and the CSSwitch desktop panel: create a profile, make it active, then click "一键开始" (Start).
+- **Literature review** — multi-source retrieval, claim-level citation audit, GRADE/SoF, and an uncertainty ledger.
+- **Single-cell analysis** — reproducible QC, annotation, differential analysis, trajectory, and communication recipes.
+- **Experimental design** — competing hypotheses, discriminating experiments, controls, and critical-data needs.
+- **Cross-modal target discovery** — literature, genes, drugs, trials, single-cell, and spatial evidence in one evidence context.
+
+See the [research-platform overview and example outputs](./docs/index.html). Every AI-assisted result remains subject to researcher review.
 
 > The current app mainly targets macOS Apple Silicon. Because the app is not notarized yet, macOS may ask you to right-click and choose "Open" the first time.
 
-[Download latest release](../../releases/latest) · [Changelog](./CHANGELOG.md) · [Report a bug](https://github.com/SuperJJ007/CSSwitch/issues/new?template=bug_report.yml) · [Request a feature](https://github.com/SuperJJ007/CSSwitch/issues/new?template=feature_request.yml)
+[Download latest release](../../releases/latest) · [Changelog](./CHANGELOG.md) · [Report a bug](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml) · [Request a feature](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)
 
 ## Contents
 
@@ -35,7 +40,7 @@ It is built for more than developers. You need Claude Science, a third-party API
 - [Development](#development)
 - [Risk and disclaimer](#risk-and-disclaimer)
 
-## Why CSSwitch exists
+## Research platform and local runtime
 
 Claude Science is Anthropic's AI agent app for research and analysis workflows, including literature review, data processing, code execution, chart generation, and writing. By default, it depends on Claude login and Anthropic inference.
 

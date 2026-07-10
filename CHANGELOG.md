@@ -4,6 +4,20 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.4.1] - 2026-07-10
+
+> Product repositioning: from model switching to an AI biomedical research platform.
+
+### Added
+- Research-first desktop home with one-click literature review, single-cell analysis, experimental-design, and cross-modal target discovery entry points.
+- Each workflow now persists its task route, enables the needed local research packs, and launches the research workspace.
+- Independent GitHub Pages-ready research-platform landing page with illustrative evidence-audit, GRADE/SoF, uncertainty, and target-ranking outputs.
+- `experimental-design` task route and automated `bio-v*` GitHub Release DMG publishing.
+
+### Changed
+- Model connection and provider configuration are now presented as settings, not the primary product surface.
+- Release metadata is aligned on `0.4.1` across the desktop app and Python package.
+
 ## [Unreleased] - single-cell runnable workflows
 
 ### Changed

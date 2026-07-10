@@ -15,6 +15,25 @@ body{
 }
 .panel{width:100%;min-height:100vh;background:var(--panel);overflow:hidden}
 .hd{display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px}
+.header-actions{display:flex;align-items:center;gap:12px}
+.settings-title{display:flex;align-items:center;justify-content:space-between;padding:4px 14px 10px;color:var(--sub);font-size:12px;font-weight:600;border-bottom:1px solid var(--line)}
+.back-btn{color:var(--accent);font-size:12px}
+.research-home{padding:8px 14px 18px}
+.research-hero{padding:18px 2px 20px}
+.eyebrow{margin:0 0 7px;color:var(--accent);font-size:10px;font-weight:750;letter-spacing:.11em}
+.research-hero h1{margin:0;color:var(--ink);font-size:25px;line-height:1.18;letter-spacing:-.04em}
+.research-hero p:not(.eyebrow){margin:10px 0 0;color:var(--sub);font-size:12px;line-height:1.65}
+.workflow-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.workflow-card{min-height:155px;display:flex;flex-direction:column;align-items:flex-start;border:1px solid var(--line);border-radius:13px;background:var(--field);padding:13px;text-align:left;font-family:inherit;color:var(--ink);cursor:pointer;transition:border-color .15s,transform .15s,box-shadow .15s}
+.workflow-card:hover{border-color:var(--accent);background:var(--panel);box-shadow:0 8px 22px rgba(37,31,28,.08);transform:translateY(-1px)}
+.workflow-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.workflow-icon{display:grid;place-items:center;width:29px;height:29px;margin-bottom:12px;border-radius:8px;background:rgba(194,90,52,.12);color:var(--accent);font-size:19px;font-weight:700}
+.workflow-title{font-size:13px;font-weight:720;letter-spacing:-.01em}
+.workflow-copy{margin-top:5px;color:var(--sub);font-size:10.5px;line-height:1.45}
+.workflow-arrow{margin-top:auto;padding-top:9px;color:var(--accent);font-size:11px;font-weight:700}
+.research-status{min-height:18px;margin-top:14px;color:var(--sub);font-size:11px;line-height:1.45}
+.research-status.err{color:var(--red)} .research-status.ok{color:var(--green)}
+.research-note{margin:9px 0 0;color:var(--sub);font-size:10px;line-height:1.5}
 /* 模式分段切换（第三方 / 官方） */
 .modeseg{padding-top:10px;padding-bottom:10px}
 .seg{display:flex;gap:3px;padding:3px;background:var(--field);border:1px solid var(--line);border-radius:10px}
@@ -162,3 +181,4 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
 .taskchips{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
 .verifyRow{display:flex;justify-content:space-between;align-items:center;font-size:12px;
   margin:4px 0;padding:4px 8px;background:var(--field);border:1px solid var(--line);border-radius:6px}
+@media (max-width:390px){.workflow-grid{grid-template-columns:1fr}.workflow-card{min-height:125px}}
