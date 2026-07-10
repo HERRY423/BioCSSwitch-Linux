@@ -1,7 +1,5 @@
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
     "RUSTSEC-2024-0413",
     "RUSTSEC-2024-0416",
     "RUSTSEC-2024-0412",
