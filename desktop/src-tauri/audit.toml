@@ -1,0 +1,8 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0075", # unic-char-range is unmaintained
+    "RUSTSEC-2025-0080", # unic-common is unmaintained
+    "RUSTSEC-2025-0100", # unic-ucd-ident is unmaintained
+    "RUSTSEC-2025-0098", # unic-ucd-version is unmaintained
+    "RUSTSEC-2024-0429", # Unsoundness in glib::VariantStrIter
+]
