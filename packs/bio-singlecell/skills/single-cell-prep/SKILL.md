@@ -38,7 +38,9 @@ description: 用于单细胞 RNA-seq 数据的标准化预处理、QC、doublet 
 
 **Step 9：特殊模态**。CITE-seq / multiome 用 `sc_multimodal_recipe`；Visium / MERFISH / Slide-seq 用 `sc_spatial_recipe`。
 
-**Step 10：交接**。如果用户要 embedding，交给 `scfm-embed`；如果要 DEG、轨迹、RNA velocity、细胞通信、marker/enrichment，交给 `sc-downstream-analysis`。
+**Step 10：组装可运行工作流包**。当用户要的是 Snakemake / Nextflow 交付物，而不是某一步的松散脚本，调用 `sc_workflow_recipe`，输出文件清单、dry-run 命令、workflow toolchain、`recipe_hash` 和 provenance skeleton。`include_scfm=true` 且 checkpoint 未固定时必须保留 `runnable=false` 与 `configuration_required`，不得把未配置模型的 embedding 描述为已可运行。
+
+**Step 11：交接**。如果用户要 embedding，交给 `scfm-embed`；如果要 DEG、轨迹、RNA velocity、细胞通信、marker/enrichment，交给 `sc-downstream-analysis`。
 
 ## 反例
 

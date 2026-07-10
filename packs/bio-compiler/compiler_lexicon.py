@@ -198,7 +198,7 @@ ROUTES: Dict[str, Dict[str, Any]] = {
         "toolchain": [
             ("pubmed_search", "拉 head-to-head / meta-analysis"),
             ("ctgov_search", "对应注册试验的终点/样本量/状态"),
-            ("analyze_endpoints", "系统比较终点定义"),
+            ("ctgov_analyze_endpoints", "系统比较终点定义"),
             ("evidence_graph", "每条疗效结论绑证据等级 + 适用边界"),
             ("uncertainty_ledger", "盲区/冲突面板"),
         ],
@@ -269,7 +269,7 @@ def detect_genes(q: str) -> List[Dict[str, Any]]:
         if tok in KNOWN_TARGETS:
             out.append({"symbol": tok, "confidence": "high", "via": "known-target"})
             seen.add(tok)
-        elif len(tok) >= 3 and any(ch.isdigit() for ch in tok) or tok in KNOWN_TARGETS:
+        elif len(tok) >= 3 and any(ch.isdigit() for ch in tok):
             out.append({"symbol": tok, "confidence": "candidate", "via": "gene-shape"})
             seen.add(tok)
     return out

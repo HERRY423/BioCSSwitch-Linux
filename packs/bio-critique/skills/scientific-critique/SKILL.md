@@ -30,6 +30,8 @@ entry point and say that formal critique still requires evidence verification.
      the final answer when discussing a finding.
 
 4. Scan methodology.
+   - Use `critique_checklist` to retrieve the fixed 10-item checklist before
+     filling judgments, so every review uses the same methodology rubric.
    - Read the core study or study summary and fill the 10-item checklist.
    - Use `critique_methodology` to validate judgments, detect contradictions,
      compute the quality score, and map findings to GRADE domains.
@@ -44,6 +46,9 @@ entry point and say that formal critique still requires evidence verification.
 6. Score and report.
    - Use `believability_score` for claim-level stars.
    - Use `critique_full_report` for a full Markdown report.
+   - Use `design_counter_experiment` for claims with major EX/METH risks; put
+     the proposed falsification design into the final "minimum next experiment"
+     rather than leaving it as vague validation language.
    - Move major EX/METH risks into `uncertainty_ledger` Conflicts or Missing
      data, and move `upgrade_path` / counter-experiment needs into Next
      experiment.
@@ -68,4 +73,3 @@ For concise answers, include:
 
 For full reviews, use `critique_full_report` and then add a short human summary
 of what should change in the manuscript or conclusion wording.
-

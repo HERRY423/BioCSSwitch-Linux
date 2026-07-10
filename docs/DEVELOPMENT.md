@@ -87,11 +87,19 @@ npm run tauri build               # 打包 → src-tauri/target/release/bundle/d
 
 ```bash
 bash test/run_all.sh                        # python 单元 + node 伪造器 + bash 脚本三件套（不碰 Science、不联网）
-python3 -m pip install -e ".[dev]"          # 首次运行 pytest 前安装开发依赖；运行时代理仍是纯标准库
+python3 -m pip install -e ".[dev]"          # 安装测试依赖与代理的 httpx[http2] 运行时
 python3 -m pytest test/test_proxy_units.py  # 代理纯逻辑单测（40）
 cd desktop/src-tauri && cargo test          # Rust 后端单测（122）；配 cargo clippy --all-targets -- -D warnings + cargo fmt --check
 node --check desktop/src/main.js            # 前端语法（不加 node 测试依赖，前端逻辑预览手验）
 ```
+
+`npm run tauri build` 会先运行 `scripts/vendor-python-runtime.py`，把
+`proxy/requirements-runtime.txt` 中的纯 Python 依赖写入 `python-vendor/` 并作为 Tauri
+resource 打包。不要提交生成目录；`python-vendor/README.md` 是唯一占位文件。
+
+安全门禁位于 `.github/workflows/ci.yml`：`cargo audit` 检查 `Cargo.lock`（包括
+`aes-gcm`、`hkdf`、`sha2` 等密码学依赖），`pip-audit .` 检查 Python 依赖树，Gitleaks
+按 `.gitleaks.toml` 扫描完整 Git 历史；三者也在每周定时任务中运行。
 
 ## 整链冒烟（碰 Science，须用户同意 + 在场，守铁律 2/3/4）
 

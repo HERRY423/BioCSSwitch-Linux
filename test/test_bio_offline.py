@@ -656,7 +656,12 @@ def test_singlecell_recipe_expansion():
     sp = sc.sc_spatial_recipe(platform="visium")
     check("spatial 配方含 squidpy spatial neighbors", "spatial_neighbors" in sp["script"])
     check("spatial 先生成 leiden 再 neighborhood enrichment", "sc.tl.leiden" in sp["script"] and 'cluster_key="leiden"' in sp["script"])
-    wf = sc.sc_workflow_recipe(engine="snakemake", batch_method="scvi", annotation_method="celltypist")
+    wf = sc.sc_workflow_recipe(
+        engine="snakemake",
+        batch_method="scvi",
+        annotation_method="celltypist",
+        scfm_model_dir="models/geneformer",
+    )
     check("workflow artifact is explicitly runnable",
           wf["artifact_type"] == "runnable_workflow" and wf["runnable"] is True and wf["dry_run_command"])
     check("Snakemake workflow package includes Snakefile and conda envs",
@@ -1017,12 +1022,18 @@ def test_debate_experiment_kg():
             200,
             {"content": [{"type": "text", "text": text}]},
             fallback_policy.Failure(fallback_policy.OK, 200, ""),
-            ctx.get("model") or "fake-model",
+            ctx.model or "fake-model",
         )
 
+    debate_ctx = task_router.current_context(
+        "deepseek",
+        {"mode": "anthropic", "url": "https://example.invalid/v1/messages"},
+        "offline-test-key",
+        force_model="m1",
+    )
     debate = debate_arena.run_debate(
         req,
-        [{"profile_id": "p1", "provider": "fake", "model": "m1"}],
+        [debate_ctx],
         fake_call,
         max_agents=3,
         rounds=2,

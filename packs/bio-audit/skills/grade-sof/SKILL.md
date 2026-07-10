@@ -19,7 +19,7 @@ description: 用于给一个 outcome 的证据确定性做 GRADE 评级、产出
 
 **Step 1：先审计证据**（若还没做）。用 `evidence-audit` / `evidence_graph` 把每条结论的引用核实、拿到证据类型（RCT / observational / …）与物种/人群/样本量。GRADE 的起始档就来自这里。
 
-**Step 2：列出关键结局**。别把所有东西混成一句"有效"。典型：主要疗效结局、关键安全结局、生活质量各评一个。
+**Step 2：列出关键结局**。别把所有东西混成一句"有效"。典型：主要疗效结局、关键安全结局、生活质量各评一个。如果输入是完整证据体（多研究、多 outcome、study-level RoB），调用 `grade_evidence_dossier` 一次性生成各 outcome 的 evidence profile、GRADE 评级、SoF Markdown 与共享证据体摘要，再逐项复核而不是手工拆散证据体。
 
 **Step 3：对每个结局调 `grade_outcome`**。给全：
 - `design`（rct / cohort / meta-analysis + underlying_design …）、`n_studies` / `n_participants`
@@ -33,7 +33,7 @@ description: 用于给一个 outcome 的证据确定性做 GRADE 评级、产出
 
 **Step 5：调 `grade_sof_table`** 把所有结局的评级汇总成 SoF 表，贴进答复。
 
-**Step 6：若要给推荐，调 `etd_recommendation`（EtD 层）**。**确定性 ≠ 推荐**——`certainty` 只回答"证据多确定"，要不要推荐、推荐得多强（strong / conditional）还得看获益/危害平衡、价值观与偏好、资源/成本、公平性/可接受性/可行性。工具按 GRADE EtD 规则把这些判断映射成推荐方向（for/against）+ 强度，并守卫"低确定性上的强推荐"（属 GRADE 不一致推荐，需符合 5 类特殊情形或降为 conditional）。措辞遵循 GRADE 惯例：strong→"we recommend"，conditional→"we suggest"。
+**Step 6：若要给推荐，调 `etd_recommendation`（EtD 层）**。**确定性 ≠ 推荐**——`certainty` 只回答"证据多确定"，要不要推荐、推荐得多强（strong / conditional）还得看获益/危害平衡、价值观与偏好、资源/成本、公平性/可接受性/可行性。工具按 GRADE EtD 规则把这些判断映射成推荐方向（for/against）+ 强度，并守卫"低确定性上的强推荐"（属 GRADE 不一致推荐，需符合 5 类特殊情形或降为 conditional）。措辞遵循 GRADE 惯例：strong→"we recommend"，conditional→"we suggest"。若专家组对 certainty、benefit-harm、values 或 resources 等判断存在分歧，调用 `etd_probabilistic_recommendation` 输入各维度的概率分布，报告 posterior direction、strength 与不确定性，不得把分歧压成单一确定评级。
 
 **Step 7：把确定性/推荐强度写进结论措辞**，并接 `uncertainty_ledger` 出五段面板——低确定性的结局往往正是 Known unknowns / Next experiment 的来源。
 

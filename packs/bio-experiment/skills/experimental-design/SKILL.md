@@ -10,7 +10,7 @@ Use this skill when the user asks what experiment to do next, how to test a biol
 ## Workflow
 
 1. Ground the gap with `bio-lit` and `bio-audit` when citations are available.
-2. If the claim is contested, use `bio-critique` or the multi-agent debate arena before selecting the hypothesis.
+2. If the claim is contested, use `bio-critique` or an explicitly configured scientific-debate workflow before selecting the hypothesis; do not assume a pack-local debate MCP tool exists.
 3. Call `hypothesis_testability_score` before writing a protocol.
 4. Call `power_analysis_plan`; do not defer power analysis until after the experiment.
 5. Call `agentic_experiment_plan` for the integrated output.

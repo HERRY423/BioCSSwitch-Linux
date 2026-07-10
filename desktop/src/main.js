@@ -141,6 +141,8 @@ function mockInvoke(cmd, args) {
           { id: "bio-privacy", name: "隐私 / 合规模式", description: "PHI 扫描 + 脱敏 + 审计日志 + Skill 强制", optional_env: [], requires_env: [], dependencies: [], requires_tools: [] },
           { id: "bio-workflows", name: "科研工作流模板 Skills", description: "综述 / 靶点 / GEO / 试验 / rebuttal / grant aims", optional_env: [], requires_env: [], dependencies: ["bio-lit", "bio-audit"], requires_tools: [] },
           { id: "bio-ml", name: "机器学习突破板块", description: "多模态 FM / 虚拟细胞 / AI 药物发现 / 联邦学习 / 临床验证门", optional_env: [], requires_env: [], dependencies: ["bio-audit", "bio-privacy"], depends_on: ["bio-audit", "bio-privacy"], requires_tools: [] },
+          { id: "bio-research-partner", name: "主动研究伙伴", description: "本地 HMAC 兴趣模型 / 主动简报 / 工作流预测 / 可删除", optional_env: [{ name: "BIOCSSWITCH_INTEREST_PROFILE_PATH", label: "本地研究画像路径（可选）" }], requires_env: [], dependencies: ["bio-lit", "bio-trials", "bio-kg", "bio-privacy"], depends_on: ["bio-lit", "bio-trials", "bio-kg", "bio-privacy"], requires_tools: [] },
+          { id: "bio-crossmodal", name: "跨模态生物医学发现", description: "文献 / 基因 / 药物 / 试验 / 单细胞 / 空间证据统一编排", optional_env: [], requires_env: [], dependencies: ["bio-lit", "bio-audit", "bio-gene", "bio-drug", "bio-trials", "bio-singlecell", "bio-sc-downstream", "bio-spatial", "bio-kg"], requires_tools: [] },
         ],
         enabled: {}, env_set: {}, mode: "proxy",
         sensitive_mode: false, local_endpoint_hosts: [], current_upstream_host: "api.deepseek.com",
@@ -163,6 +165,9 @@ function mockInvoke(cmd, args) {
     case "list_biomed_tasks":
       return Promise.resolve({
         tasks: [
+          { id: "research-partner", label: "主动研究伙伴", hint: "隐私优先的本地兴趣建模与个性化简报" },
+          { id: "hypothesis-generation", label: "矛盾驱动假设生成", hint: "竞争假设 / 区分性实验 / 关键数据需求" },
+          { id: "crossmodal-discovery", label: "跨模态靶点发现", hint: "六类证据统一上下文；工具调用 + 长上下文 + JSON" },
           { id: "lit-review", label: "文献综述", hint: "长上下文优先" },
           { id: "clinical-trials", label: "临床试验检索", hint: "工具调用密集" },
           { id: "target-discovery", label: "靶点发现 / 老药新用", hint: "多源组合查询" },

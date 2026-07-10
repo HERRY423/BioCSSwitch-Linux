@@ -43,7 +43,7 @@ Phase 4          0            0         3
 
 ### Step 4：endpoint 归一化
 
-`analyze_endpoints`（如果 CT.gov API 支持——CSSwitch 里没直接暴露，用 `ctgov_detail` 拿每个 NCT 的 primary_outcomes 逐个抽）。产出"这个适应症里被用过的主要终点"清单：
+优先调用 `ctgov_analyze_endpoints`（基础 `bio-trials` pack）按 condition / intervention / phase 聚合 primary 与 secondary outcomes；如果只接入了 MCP shim，也可以用同等语义的 `analyze_endpoints`。不要再逐个 `ctgov_detail` 手工抽 endpoint，除非需要核对某个 NCT 的完整方案。产出"这个适应症里被用过的主要终点"清单：
 - overall survival (OS)
 - progression-free survival (PFS)
 - objective response rate (ORR)

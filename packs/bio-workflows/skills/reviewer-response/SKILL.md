@@ -70,6 +70,7 @@ Reviewer 常"暗示"你引用他/她的论文。判断：
 - 每次引用新文献支持你的答复：调 `evidence-audit` skill 校验 PMID / DOI 真实存在，别在 rebuttal 里挂假引用（reviewer 会查，一被查到基本没救）。
 - 需要"相关工作"补充时：`pubmed_search` 用 reviewer 抱怨的 topic 关键词，找 3–5 篇最新的。
 - 涉及临床试验对比时：`ctgov_search` 给 NCT 号，别口头描述。
+- 寄出前对 rebuttal 和修订稿摘要运行 `packs/bio-audit/evidence_linter.py --strict <draft.md>`；它是最后一道假 PMID / DOI / NCT 扫雷，不替代 `evidence_verify`，但能防止草稿合并时把未核验引用带出去。
 
 ## 语言基调
 

@@ -83,6 +83,7 @@ packs/
 
 1. 建 `packs/<pack-id>/pack.json`（id 前缀不硬性要求，但 server name **必须 `bio-` 起头**——凭这个前缀分辨归属，避免踩用户自加的其它 MCP）。
 2. 每个 server 一个 Python 文件，`#!/usr/bin/env python3`，`if __name__ == "__main__": server.run()`。
+   当前 runner 以文件方式启动 server，因此需要导入 `packs/_lib` 的新 server 统一使用带注释、去重检查的 `_PACKS_ROOT` bootstrap。等 runner 改为启动已安装/可导入模块后，应一次性删除该 bootstrap，禁止各 pack 发明不同的 `sys.path` 片段。
 3. tool 定义用 `@server.tool(name, description, input_schema)` 装饰；返回 str / list（MCP content） / 任意可 JSON 化对象。
 4. 若需要 Skill，写 `SKILL.md`（必须首行是 `---` frontmatter 段，含 `name:` `description:`），放在 `pack/skills/<skill-id>/SKILL.md`。
 5. 不需要在任何地方硬编码注册 pack —— `packs::list_packs` 会发现 `packs/*/pack.json`，按 schema 校验，解析 `dependencies`，再按依赖拓扑顺序装配。校验失败会在 stderr 打出原因。
@@ -136,6 +137,29 @@ packs/
 - **审计日志**（`audit_server.py`）：追加式 JSON-Lines，`~/.csswitch/audit/YYYY-MM-DD.jsonl`（0600）。工具**只吃 hash + 摘要**，`input_sample` 参数会被 SHA-256 后丢弃 —— 审计日志本身能给第三方看。
 - **敏感模式门**（后端 Rust）：`sensitive_mode=true` 时，`one_click_login` 拒绝把请求发给不在 `local_endpoint_hosts` 白名单里的 provider。白名单**反向防御**：`api.deepseek.com` / `dashscope.aliyuncs.com` / `api.anthropic.com` / `openai.com` 一律拒绝加入（否则等于绕过敏感模式）。
 - Skill `sensitive-mode`：在识别到疑似临床数据时**先扫再问**，给用户 A/撤回、B/脱敏后继续、C/本地端点 三选一。**不代替用户决定**。
+
+## 主动研究伙伴（bio-research-partner）
+
+`bio-research-partner` 把跨会话行为压缩成**本地、可删除、无原始事件流水**的兴趣模型。学习默认关闭；每次写入都要求显式 consent。默认存储模式将规范化基因、疾病、通路和公开文献/试验 ID 用独立 HMAC key 伪名化，文件只保留带 90 天半衰期的聚合权重、weekday/weekend × 6 小时时段的工作流计数和去重冷却状态。
+
+核心工具：
+
+- `research_interest_observe`：记录 paper_saved / entity_queried / suggestion_accepted / suggestion_rejected / workflow_observed / recommendation_shown 六类结构化事件；拒绝 raw prompt、摘要、任意 metadata。
+- `research_interest_inspect` / `research_interest_delete`：安全检查与彻底删除 profile + HMAC key。
+- `research_session_brief` / `research_refresh_plan`：从本地 KG/项目概念 catalog 匹配可读兴趣，生成 PubMed、bioRxiv、medRxiv、ClinicalTrials.gov 更新动作；默认 `requires_consent`，工具本身绝不联网。
+- `research_updates_rank`：候选内容仅在内存中按兴趣、时效、证据质量、来源多样性和冷却期排序，不写盘。
+
+当前“主动”边界是**会话开始简报 + 可交给宿主 scheduler 的刷新动作**，不是静默后台 daemon 或系统通知。详细隐私与集成合同见 [research-partner-crossmodal.md](./research-partner-crossmodal.md)。
+
+## 矛盾驱动假设生成（bio-kg）
+
+`kg_generate_hypotheses` 消费 `kg_conflict_scan.conflicts`，或直接扫描 triples / 本地 KG。它把结果严格分成 `observed_conflict`、`generated_hypothesis`、`prediction`、`discriminating_experiment`，比较 context / model / species / population / tissue / cell state / dose / time / endpoint / method 等维度，输出 5 类竞争解释、3 类区分性实验、key_data_needs、provenance 和不确定性。生成记录永不自动持久化为 KG evidence；选中的实验可 handoff 给 `bio-experiment.agentic_experiment_plan`。
+
+## 跨模态统一编排（bio-crossmodal）
+
+`bio-crossmodal` 用 15 步依赖图编排 bio-lit / bio-gene / bio-drug / bio-trials / bio-singlecell / bio-spatial，并把每次真实工具结果 reduce 到同一个 `bio-crossmodal/evidence-context/1`。核心工具为 `crossmodal_plan_unmet_need`、`crossmodal_reduce_evidence`、`crossmodal_integrate_observations` 和 `crossmodal_synthesize`。
+
+关键语义：缺失 = unknown；显式支持/反证才进入证据；单细胞/空间 recipe 只记 provenance，只有实际测量结果才能加分；无 trial 检索用中性 novelty prior，只有执行过的零命中检索才能支持“低饱和”。靶点分数同时报告 biological basis、druggability、translational specificity、clinical novelty、evidence diversity、quality、冲突惩罚和模态覆盖，不可解释为临床推荐。
 
 ## 远程 MCP 本地替身层（bio-mcp-shim）
 

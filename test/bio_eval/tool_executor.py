@@ -50,6 +50,8 @@ _SERVER_MODULE_PATHS = [
     "bio-ml/ml_server.py",
     "bio-kg/knowledge_graph_server.py",
     "bio-experiment/experiment_server.py",
+    "bio-research-partner/research_partner_server.py",
+    "bio-crossmodal/crossmodal_server.py",
 ]
 
 

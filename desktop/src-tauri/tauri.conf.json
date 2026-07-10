@@ -4,6 +4,7 @@
   "version": "0.3.7",
   "identifier": "com.biocsswitch.menubar",
   "build": {
+    "beforeBuildCommand": "python3 ../scripts/vendor-python-runtime.py",
     "frontendDist": "../src"
   },
   "app": {
@@ -41,7 +42,8 @@
     "resources": {
       "../../proxy": "proxy",
       "../../scripts": "scripts",
-      "../../packs": "packs"
+      "../../packs": "packs",
+      "../../python-vendor": "python-vendor"
     },
     "macOS": {
       "signingIdentity": "-"

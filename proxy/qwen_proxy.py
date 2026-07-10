@@ -20,9 +20,9 @@ import os
 import re
 import sys
 import time
-import urllib.request
-import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import http_transport
 
 DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
@@ -175,19 +175,17 @@ def dashscope_call(oreq, attempts=4):
     对服务端明确响应（如 400 max_tokens）不重试，原样抛给上层。"""
     data = json.dumps(oreq).encode()
     headers = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
-    for i in range(attempts):
-        req = urllib.request.Request(DASHSCOPE_URL, data=data, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=180) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError:
-            raise  # 服务端有明确响应，交给上层处理
-        except Exception as e:
-            if i < attempts - 1:
-                log(f"  ~ 上游连接抖动，重试 {i + 1}/{attempts - 1}: {e}")
-                time.sleep(0.8 * (i + 1))
-                continue
-            raise
+    body, _content_type = http_transport.default_transport().post_bytes(
+        DASHSCOPE_URL,
+        data,
+        headers,
+        attempts=attempts,
+        timeout=180,
+        on_retry=lambda current, total, exc: log(
+            f"  ~ 上游连接抖动，重试 {current}/{total}: {exc}"
+        ),
+    )
+    return json.loads(body)
 
 
 class H(BaseHTTPRequestHandler):
@@ -261,7 +259,7 @@ class H(BaseHTTPRequestHandler):
             else:
                 self._send_json(200, aresp)
                 log(f"  <- DashScope 非流式 OK（blocks={n_blocks} tool_use={n_tooluse} stop={aresp['stop_reason']}）")
-        except urllib.error.HTTPError as e:
+        except http_transport.UpstreamHTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:400]
             log(f"  !! DashScope HTTP {e.code}: {detail}")
             self._send_json(502, {"type": "error", "error": {"type": "api_error",

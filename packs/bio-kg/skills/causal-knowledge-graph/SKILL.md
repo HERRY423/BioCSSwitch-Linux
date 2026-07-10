@@ -11,10 +11,11 @@ Use this skill when a biomedical answer produces causal claims that should be re
 
 1. Extract candidate triples with `kg_extract_triples`.
 2. Curate entity names, context, evidence IDs, experiment type, model system, and confidence before persistence.
-3. Persist curated triples with `kg_add_triples`.
-4. Before asserting a causal direction, run `kg_conflict_scan`.
-5. For mechanistic explanations, run `kg_causal_paths` and treat paths as hypotheses unless every edge is strongly supported.
-6. For next-step planning, run `kg_gap_analysis` and hand high-priority gaps to `bio-experiment.agentic_experiment_plan`.
+3. Before adding anything new, run `kg_query` for the subject/object/context to see what the local graph already contains.
+4. Persist curated triples with `kg_add_triples`.
+5. Before asserting a causal direction, run `kg_conflict_scan`.
+6. For mechanistic explanations, run `kg_causal_paths` and treat paths as hypotheses unless every edge is strongly supported.
+7. For next-step planning, run `kg_gap_analysis` and hand high-priority gaps to `bio-experiment.agentic_experiment_plan`.
 
 ## Output Standard
 

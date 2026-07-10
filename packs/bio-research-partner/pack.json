@@ -1,0 +1,37 @@
+{
+  "id": "bio-research-partner",
+  "name": "Privacy-first research partner",
+  "description": "Learns a local, data-minimized research-interest profile from explicit structured events; predicts coarse workflows; ranks new papers, preprints, and trials; and creates consent-gated refresh plans without silently networking or retaining raw prompts.",
+  "version": "0.1.0",
+  "dependencies": ["bio-lit", "bio-trials", "bio-kg", "bio-privacy"],
+  "depends_on": ["bio-lit", "bio-trials", "bio-kg", "bio-privacy"],
+  "requires_tools": [
+    {
+      "name": "python3",
+      "kind": "runtime",
+      "required": true,
+      "purpose": "Run the local research-partner MCP server"
+    }
+  ],
+  "requires_env": [],
+  "optional_env": [
+    {
+      "name": "BIOCSSWITCH_INTEREST_PROFILE_PATH",
+      "label": "Local research-interest profile path (optional)"
+    }
+  ],
+  "task_tags": ["research-partner", "lit-review", "clinical-trials", "target-discovery"],
+  "servers": [
+    {
+      "name": "bio-research-partner",
+      "script": "packs/bio-research-partner/research_partner_server.py",
+      "env_pass": ["BIOCSSWITCH_INTEREST_PROFILE_PATH", "CSSWITCH_INTEREST_PROFILE_PATH"]
+    }
+  ],
+  "skills": [
+    {
+      "id": "research-partner",
+      "src": "packs/bio-research-partner/skills/research-partner"
+    }
+  ]
+}

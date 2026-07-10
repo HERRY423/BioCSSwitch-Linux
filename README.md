@@ -64,6 +64,9 @@ BioCSSwitch 继承自 [SuperJJ007/CSSwitch](https://github.com/SuperJJ007/CSSwit
 - **自己挑模型，显示也不含糊**：每个服务商都能在下拉里选择我们维护的主流模型，也可以直接填写任意模型名。填好后，Science 顶部的模型选择器会显示你选择的真实模型名（例如 `glm-5.2`），而不是笼统的 claude。
 - **启用前会校验 Key**：把一条配置「设为当前」或修改正在生效的连接时，BioCSSwitch 会先发一条最小请求验证 Key，通不过就自动回退、不会谎报已生效。（新建配置只保存、不联网，验证留到启用那一步。）
 - **内置生物医学工具包**：覆盖 PubMed / Europe PMC / Crossref / bioRxiv / ClinicalTrials.gov / ChEMBL / Open Targets / HGNC / MeSH / UniProt / Ensembl 等本地 MCP 与 Skill 工作流，并提供证据审计、GRADE/SoF、PHI 脱敏、隐私红队和 provider benchmark。
+- **主动研究伙伴**：`bio-research-partner` 在显式 opt-in 后只用结构化事件更新本地 HMAC 兴趣模型，不保存原始提示或行为流水；可预测粗粒度工作流、生成论文/预印本/临床试验刷新计划并本地排序候选，支持检查与彻底删除。
+- **矛盾驱动假设生成**：`kg_generate_hypotheses` 把 KG 中相反方向的证据拆成已观察冲突、竞争假设、可证伪预测、区分性实验和关键数据需求；生成内容永不自动写回为证据。
+- **跨模态统一推理**：`bio-crossmodal` 用一个可序列化 EvidenceContext 编排文献、基因、药物、试验、单细胞和空间证据，显式报告交叉验证、冲突、缺失模态与靶点优先级；“没查到”始终是未知，不会伪装成反证。
 - **单细胞与 scFM 工作流**：提供 `bio-singlecell`、`bio-scfm`、`bio-sc-downstream`、`bio-sc-atlas` 与 `sc-analysis`，生成 QC、doublet、batch、cell type annotation、Geneformer/scGPT/CellFM/UCE embedding skeleton、DEG、trajectory、cell-cell communication 和 CELLxGENE 下载配方。
 - **机器学习突破板块**：提供 `bio-ml` 与 `biomedical-ml-strategy`，把多模态基础模型、虚拟细胞/扰动预测、AI 药物发现、联邦学习、临床 ML 验证门和自驱实验室做成可复现 recipe、不可误跑的 skeleton、provenance 与 claim-scope gate。
 - **方便检查更新**：可以从面板直接打开 GitHub Releases，查看和下载新版本。
@@ -147,6 +150,7 @@ CSSwitch 不是 Claude 官方服务，也不会让本地生成的启动门票获
 - 第三方模型对工具调用、长上下文、thinking、图片和流式输出的兼容程度不同；原生 Anthropic 端点通常比 OpenAI 翻译路径更稳。
 - 当前 macOS 包尚未 Apple 公证，首次启动需要手动放行。
 - 当前运行时仍依赖 `python3` 启动代理；移到 Rust 单二进制是后续计划。
+- 发布包会内置代理所需的 `httpx + h2` 纯 Python 依赖；源码运行请先执行 `python3 -m pip install -e .`。代理复用连接池，并在上游支持时协商 HTTP/2。
 
 已知问题和排期见 [docs/known-issues.md](./docs/known-issues.md)。
 
@@ -181,12 +185,15 @@ python3 -m pip install -e ".[dev]"
 python3 -m pytest test
 ```
 
+CI 在 PR、主分支推送和每周定时任务中执行 `cargo audit`、`pip-audit` 与 Gitleaks；Dependabot 同步跟踪 Cargo、Python、npm 和 GitHub Actions 依赖更新。
+
 更多开发说明见：
 
 - [desktop/README.md](./desktop/README.md)
 - [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)
 - [docs/provider-support.md](./docs/provider-support.md)
 - [docs/verified-facts.md](./docs/verified-facts.md)
+- [主动研究伙伴与跨模态编排](./docs/research-partner-crossmodal.md)
 
 ## 风险与免责声明
 

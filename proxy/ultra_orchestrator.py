@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -22,6 +21,8 @@ import knowledge_ingest
 import anthropic_compat
 import provider_policy
 import provider_registry
+from http_transport import UpstreamHTTPError
+from request_context import RequestContext
 
 
 @dataclass
@@ -67,7 +68,7 @@ def _text_has_phi(text: str) -> bool:
     return any(re.search(p, text, re.I) for p in patterns)
 
 
-def preflight_guard(req: Dict[str, Any], ctx: Dict[str, Any], config: Dict[str, Any]) -> fallback_policy.Failure:
+def preflight_guard(req: Dict[str, Any], ctx: RequestContext, config: Dict[str, Any]) -> fallback_policy.Failure:
     if config.get("sensitive_mode") and request_has_phi(req):
         allowed = config.get("local_endpoint_hosts") or []
         if not task_router.is_local_or_allowed(ctx, allowed):
@@ -319,7 +320,7 @@ def quality_gate(req: Dict[str, Any], resp: Dict[str, Any], task_id: str,
     return fallback_policy.Failure(fallback_policy.OK, 200, "")
 
 
-def handle_request(req: Dict[str, Any], active_ctx: Dict[str, Any], config: Dict[str, Any],
+def handle_request(req: Dict[str, Any], active_ctx: RequestContext, config: Dict[str, Any],
                    http_post: Callable[..., Tuple[bytes, str]], ledger_path: Optional[str],
                    log_fn: Callable[[str], None] = lambda _msg: None,
                    mode: str = "ultra_conservative") -> Optional[UltraResult]:
@@ -340,7 +341,9 @@ def handle_request(req: Dict[str, Any], active_ctx: Dict[str, Any], config: Dict
     if sensitive_skips:
         route_events.append({"kind": "sensitive_filter", "skipped": sensitive_skips})
 
-    ledger = fallback_policy.FallbackLedger(ledger_path, extra_secrets=[c.get("key", "") for c in contexts])
+    ledger = fallback_policy.FallbackLedger(
+        ledger_path, extra_secrets=[context.key for context in contexts]
+    )
     attempts: List[Attempt] = []
     final_failure = fallback_policy.Failure(fallback_policy.TRANSPORT_ERROR, 0, "no attempts")
 
@@ -357,7 +360,7 @@ def handle_request(req: Dict[str, Any], active_ctx: Dict[str, Any], config: Dict
         ultra_cfg = config.get("ultra") if isinstance(config.get("ultra"), dict) else {}
         debate_cfg = ultra_cfg.get("debate") if isinstance(ultra_cfg.get("debate"), dict) else {}
 
-        def _debate_call(role_req: Dict[str, Any], ctx: Dict[str, Any],
+        def _debate_call(role_req: Dict[str, Any], ctx: RequestContext,
                          _role: Dict[str, Any], _round_index: int):
             pre = preflight_guard(role_req, ctx, config)
             model = resolve_model(role_req.get("model"), ctx)
@@ -417,12 +420,15 @@ def handle_request(req: Dict[str, Any], active_ctx: Dict[str, Any], config: Dict
                 body_obj,
                 task_id,
                 config,
-                f"ultra:{ctx.get('profile_id') or ctx.get('profile_name') or 'active'}",
+                f"ultra:{ctx.profile_id or ctx.profile_name or 'active'}",
             )
             if kg_event:
                 route_events.append(kg_event)
             ledger.write(_ledger_entry(task_id, attempts, "pass", route_events, mode, policy))
-            log_fn(f"  <- ultra OK task={task_id} attempts={len(attempts)} final={ctx.get('profile_name')}")
+            log_fn(
+                f"  <- ultra OK task={task_id} attempts={len(attempts)} "
+                f"final={ctx.profile_name}"
+            )
             return UltraResult(True, 200, body_obj, task_id, attempts, {"events": route_events})
 
         remaining_budget = policy.max_attempts - len(attempts)
@@ -461,39 +467,39 @@ def handle_request(req: Dict[str, Any], active_ctx: Dict[str, Any], config: Dict
     )
 
 
-def call_once(req: Dict[str, Any], ctx: Dict[str, Any],
+def call_once(req: Dict[str, Any], ctx: RequestContext,
               http_post: Callable[..., Tuple[bytes, str]]) -> Tuple[int, Dict[str, Any], fallback_policy.Failure, str]:
     upstream, compat_ctx = anthropic_compat.transform_request(req, _provider_state(ctx))
     target_model = compat_ctx.target_model
     try:
-        if ctx.get("provider") == "openai-responses":
-            omit_tools = {"web_search"} if "dashscope.aliyuncs.com" in (ctx.get("url") or "") else set()
+        if ctx.provider == "openai-responses":
+            omit_tools = {"web_search"} if "dashscope.aliyuncs.com" in ctx.url else set()
             payload = anthropic_compat.anthropic_to_openai_responses(
                 upstream,
                 target_model,
                 max_output_tokens=upstream.get("max_tokens"),
                 omit_tool_names=omit_tools,
             )
-            raw, _ct = http_post(ctx["url"], json.dumps(payload).encode(), auth_headers(ctx))
+            raw, _ct = http_post(ctx.url, json.dumps(payload).encode(), auth_headers(ctx))
             body = anthropic_compat.openai_responses_to_anthropic(
                 json.loads(raw),
                 req.get("model") or target_model,
                 default_id="msg_ultra_proxy",
             )
-        elif ctx.get("mode") == "openai" or ctx.get("provider") == "qwen":
+        elif ctx.mode == "openai" or ctx.provider == "qwen":
             payload = anthropic_compat.anthropic_to_openai(
                 upstream,
                 target_model,
                 upstream.get("max_tokens"),
             )
-            raw, _ct = http_post(ctx["url"], json.dumps(payload).encode(), auth_headers(ctx))
+            raw, _ct = http_post(ctx.url, json.dumps(payload).encode(), auth_headers(ctx))
             body = openai_to_anthropic(json.loads(raw), req.get("model") or target_model)
         else:
             payload = upstream
-            raw, _ct = http_post(ctx["url"], json.dumps(payload).encode(), auth_headers(ctx))
+            raw, _ct = http_post(ctx.url, json.dumps(payload).encode(), auth_headers(ctx))
             body = json.loads(raw)
         return 200, body, fallback_policy.Failure(fallback_policy.OK, 200, ""), target_model
-    except urllib.error.HTTPError as e:
+    except UpstreamHTTPError as e:
         detail = ""
         try:
             detail = e.read().decode("utf-8", "replace")[:400]
@@ -513,22 +519,22 @@ def _failure_http_status(failure: fallback_policy.Failure) -> int:
     return 502
 
 
-def resolve_model(name: Optional[str], ctx: Dict[str, Any]) -> str:
+def resolve_model(name: Optional[str], ctx: RequestContext) -> str:
     return provider_policy.resolve_model(name, _provider_state(ctx))
 
 
-def _provider_state(ctx: Dict[str, Any]) -> provider_policy.ProviderState:
-    provider = str(ctx.get("provider") or "deepseek")
+def _provider_state(ctx: RequestContext) -> provider_policy.ProviderState:
+    provider = ctx.provider or "deepseek"
     definition = provider_registry.PROVIDERS.get(provider)
     if definition is None:
-        fallback_name = "openai-custom" if ctx.get("mode") == "openai" else "relay"
+        fallback_name = "openai-custom" if ctx.mode == "openai" else "relay"
         definition = provider_registry.PROVIDERS[fallback_name]
     return provider_policy.ProviderState(
         policy=provider_policy.policy_from_prov(definition),
         prov_name=provider,
-        relay_force_model=ctx.get("model") or None,
+        relay_force_model=ctx.model or None,
         relay_models=(),
-        relay_thinking=ctx.get("thinking_policy") or None,
+        relay_thinking=ctx.thinking_policy or None,
         shim_mode="off",
     )
 
@@ -538,11 +544,11 @@ def openai_to_anthropic(resp: Dict[str, Any], model_id: str) -> Dict[str, Any]:
         resp, model_id, default_id="msg_ultra_proxy")
 
 
-def auth_headers(ctx: Dict[str, Any]) -> Dict[str, str]:
-    style = ctx.get("auth_style", "x-api-key")
-    key = ctx.get("key", "")
+def auth_headers(ctx: RequestContext) -> Dict[str, str]:
+    style = ctx.auth_style
+    key = ctx.key
     headers = {"Content-Type": "application/json"}
-    if ctx.get("mode") != "openai":
+    if ctx.mode != "openai":
         headers["anthropic-version"] = "2023-06-01"
     if style in ("x-api-key", "both"):
         headers["x-api-key"] = key
@@ -551,7 +557,7 @@ def auth_headers(ctx: Dict[str, Any]) -> Dict[str, str]:
     return headers
 
 
-def clamp_max_tokens(v: Any, ctx: Dict[str, Any], model: str) -> Any:
+def clamp_max_tokens(v: Any, ctx: RequestContext, model: str) -> Any:
     return provider_policy.clamp_max_tokens(v, model, _provider_state(ctx))
 
 
@@ -567,49 +573,47 @@ def _tool_result_text(req: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _filter_sensitive_contexts(req: Dict[str, Any], contexts: List[Dict[str, Any]],
-                               config: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _filter_sensitive_contexts(
+    req: Dict[str, Any],
+    contexts: List[RequestContext],
+    config: Dict[str, Any],
+) -> Tuple[List[RequestContext], List[Dict[str, Any]]]:
     if not (config.get("sensitive_mode") and request_has_phi(req)):
         return contexts, []
     allowed = config.get("local_endpoint_hosts") or []
-    kept: List[Dict[str, Any]] = []
+    kept: List[RequestContext] = []
     skipped: List[Dict[str, Any]] = []
     for ctx in contexts:
         if task_router.is_local_or_allowed(ctx, allowed):
             kept.append(ctx)
         else:
             skipped.append({
-                "profile_id": ctx.get("profile_id", ""),
-                "profile_name": ctx.get("profile_name", ""),
-                "provider": ctx.get("provider", ""),
+                "profile_id": ctx.profile_id,
+                "profile_name": ctx.profile_name,
+                "provider": ctx.provider,
                 "host": task_router.host_from_context(ctx),
                 "reason": "sensitive_mode_phi_requires_local_or_allowed_host",
             })
     return kept, skipped
 
 
-def _context_key(ctx: Dict[str, Any]) -> Tuple[str, str, str, str]:
-    return (
-        str(ctx.get("profile_id") or ""),
-        str(ctx.get("provider") or ""),
-        str(ctx.get("url") or ""),
-        str(ctx.get("model") or ""),
-    )
+def _context_key(ctx: RequestContext) -> Tuple[str, str, str, str]:
+    return ctx.identity_key()
 
 
-def _attempt(ctx: Dict[str, Any], req: Dict[str, Any], status: int,
+def _attempt(ctx: RequestContext, req: Dict[str, Any], status: int,
              failure: fallback_policy.Failure, model: Optional[str] = None,
              subagents: Optional[Dict[str, Any]] = None) -> Attempt:
     return Attempt(
-        profile_id=ctx.get("profile_id", ""),
-        profile_name=ctx.get("profile_name", ""),
-        provider=ctx.get("provider", ""),
+        profile_id=ctx.profile_id,
+        profile_name=ctx.profile_name,
+        provider=ctx.provider,
         model=model or resolve_model(req.get("model"), ctx),
         status=status,
         outcome=failure.kind,
         reason=failure.reason,
-        route_source=ctx.get("_route_source", ""),
-        probes=ctx.get("_probe_results", []),
+        route_source=ctx.route_source,
+        probes=[dict(item) for item in ctx.probe_results],
         subagents=subagents or {},
     )
 

@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import fallback_policy
 import task_router
+from request_context import RequestContext
 
 
 ROLE_SPECS = [
@@ -89,8 +90,8 @@ def debate_body(req_model: str, result: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_debate(
     req: Dict[str, Any],
-    contexts: List[Dict[str, Any]],
-    call_model: Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any], int], Tuple[int, Dict[str, Any], fallback_policy.Failure, str]],
+    contexts: List[RequestContext],
+    call_model: Callable[[Dict[str, Any], RequestContext, Dict[str, Any], int], Tuple[int, Dict[str, Any], fallback_policy.Failure, str]],
     task_id: str = "scientific-debate",
     max_agents: int = 4,
     rounds: int = 2,
@@ -112,9 +113,9 @@ def run_debate(
             turn = DebateTurn(
                 role_id=role["id"],
                 role_name=role["name"],
-                provider=str(ctx.get("provider", "")),
+                provider=ctx.provider,
                 model=model,
-                profile_id=str(ctx.get("profile_id", "")),
+                profile_id=ctx.profile_id,
                 round_index=round_index,
                 status=status,
                 outcome=failure.kind,
@@ -131,11 +132,11 @@ def run_debate(
         "roles": roles,
         "route_contexts": [
             {
-                "profile_id": c.get("profile_id", ""),
-                "profile_name": c.get("profile_name", ""),
-                "provider": c.get("provider", ""),
-                "model": c.get("model", ""),
-                "route_source": c.get("_route_source", ""),
+                "profile_id": c.profile_id,
+                "profile_name": c.profile_name,
+                "provider": c.provider,
+                "model": c.model,
+                "route_source": c.route_source,
             }
             for c in contexts[:max_agents]
         ],

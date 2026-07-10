@@ -73,6 +73,9 @@ Claude Science sandbox
 - Native Anthropic endpoints such as DeepSeek, Kimi, and MiniMax are passed through when possible to preserve tool use, thinking, and streaming behavior.
 - Qwen and custom OpenAI endpoints are translated by the local proxy.
 - Local config and logs make debugging and issue reports easier.
+- `bio-research-partner` learns only from explicitly consented, structured local events; it stores HMAC-pseudonymized aggregates rather than raw prompts and produces consent-gated paper, preprint, and trial refresh plans.
+- `kg_generate_hypotheses` converts opposite KG edges into rival hypotheses, falsifiable predictions, discriminating experiments, and critical data needs without promoting generated text to evidence.
+- `bio-crossmodal` coordinates literature, gene, drug, trial, single-cell, and spatial outputs through one serializable evidence context with explicit provenance, conflicts, missing modalities, and target ranking.
 
 ## Quick start
 
@@ -133,6 +136,7 @@ CSSwitch is not an official Claude service, and its locally generated launch tic
 - Third-party models differ in tool use, long context, thinking, image, and streaming compatibility. Native Anthropic endpoints are usually more reliable than OpenAI translation paths.
 - The macOS package is not notarized yet, so the first launch requires manual approval.
 - The current runtime still needs `python3` for the proxy. Moving to a Rust single-binary proxy is on the roadmap.
+- Release bundles include the proxy's pure-Python `httpx + h2` runtime. Source checkouts should run `python3 -m pip install -e .`; the proxy then reuses pooled connections and negotiates HTTP/2 when supported upstream.
 
 Known issues and roadmap notes live in [docs/known-issues.md](./docs/known-issues.md).
 
@@ -180,8 +184,11 @@ cd desktop/src-tauri
 cargo test
 
 cd ../..
+python3 -m pip install -e ".[dev]"
 python3 -m pytest test
 ```
+
+CI runs `cargo audit`, `pip-audit`, and Gitleaks on pull requests, main-branch pushes, and a weekly schedule. Dependabot tracks Cargo, Python, npm, and GitHub Actions updates.
 
 More development notes:
 
@@ -189,6 +196,7 @@ More development notes:
 - [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)
 - [docs/provider-support.md](./docs/provider-support.md)
 - [docs/verified-facts.md](./docs/verified-facts.md)
+- [Research partner and cross-modal orchestration](./docs/research-partner-crossmodal.md)
 
 ## Risk and disclaimer
 

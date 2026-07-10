@@ -13,6 +13,7 @@ API 文档：https://clinicaltrials.gov/data-api/api
 from __future__ import annotations
 
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,7 +24,7 @@ from _lib.server import MCPServer  # noqa: E402
 
 
 _BASE = "https://clinicaltrials.gov/api/v2"
-server = MCPServer("bio-trials-ctgov", "0.1.0")
+server = MCPServer("bio-trials-ctgov", "0.1.1")
 
 
 def _flatten_study(s: dict) -> dict:
@@ -171,6 +172,82 @@ def ctgov_by_sponsor(sponsor: str, status: str | None = None,
     return {
         "total": (data or {}).get("totalCount"),
         "results": [_flatten_study(s) for s in studies],
+    }
+
+
+@server.tool(
+    "ctgov_analyze_endpoints",
+    "Aggregate primary and secondary ClinicalTrials.gov outcome measures across matching trials. "
+    "Use this for endpoint benchmarking instead of fetching each NCT one by one. Filters mirror "
+    "ctgov_search: condition, intervention, status, phase, and pageSize.",
+    {
+        "type": "object",
+        "properties": {
+            "condition": {"type": "string", "description": "Disease / condition, e.g. 'glioblastoma'"},
+            "intervention": {"type": "string", "description": "Drug / therapy name"},
+            "status": {"type": "string", "description": "Trial status filter, pipe-separated"},
+            "phase": {"type": "string", "description": "e.g. 'PHASE2', 'PHASE3'"},
+            "pageSize": {"type": "integer", "default": 50, "minimum": 1, "maximum": 100},
+        },
+    },
+)
+def ctgov_analyze_endpoints(condition: str | None = None,
+                            intervention: str | None = None,
+                            status: str | None = None,
+                            phase: str | None = None,
+                            pageSize: int = 50):
+    pageSize = max(1, min(int(pageSize or 50), 100))
+    data = http.get_json(f"{_BASE}/studies", params=_search_params(
+        condition=condition,
+        intervention=intervention,
+        status=status,
+        phase=phase,
+        pageSize=pageSize,
+    ))
+    studies = (data or {}).get("studies") or []
+    primary = Counter()
+    secondary = Counter()
+    refs: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    for s in studies:
+        prot = s.get("protocolSection") or {}
+        nct_id = ((prot.get("identificationModule") or {}).get("nctId") or "").strip()
+        outcomes = prot.get("outcomesModule") or {}
+        for o in outcomes.get("primaryOutcomes") or []:
+            measure = (o.get("measure") or "").strip()
+            if measure:
+                primary[measure] += 1
+                if nct_id:
+                    refs[("primary", measure)].append(nct_id)
+        for o in outcomes.get("secondaryOutcomes") or []:
+            measure = (o.get("measure") or "").strip()
+            if measure:
+                secondary[measure] += 1
+                if nct_id:
+                    refs[("secondary", measure)].append(nct_id)
+
+    def _ranked(counter: Counter, kind: str):
+        return [
+            {
+                "endpoint": endpoint,
+                "count": count,
+                "nct_ids": refs[(kind, endpoint)][:10],
+            }
+            for endpoint, count in counter.most_common(30)
+        ]
+
+    return {
+        "total": (data or {}).get("totalCount"),
+        "n_trials_scanned": len(studies),
+        "filters": {
+            "condition": condition,
+            "intervention": intervention,
+            "status": status,
+            "phase": phase,
+            "pageSize": pageSize,
+        },
+        "primary": _ranked(primary, "primary"),
+        "secondary": _ranked(secondary, "secondary"),
     }
 
 

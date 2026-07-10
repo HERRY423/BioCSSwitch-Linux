@@ -26,7 +26,6 @@ Providers:
 from __future__ import annotations
 
 import argparse
-import http.client
 import json
 import logging
 import logging.handlers
@@ -38,9 +37,6 @@ import socket
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
@@ -50,41 +46,18 @@ import ultra_orchestrator
 import provider_policy
 import anthropic_compat
 import provider_registry
+import http_transport
+from request_context import RequestContext
 
 # ---------- provider 注册表 ----------
 PROVIDERS = provider_registry.PROVIDERS
 
 LOGGER = logging.getLogger("csswitch.proxy")
 
-@dataclass
-class RequestContext:
-    """One proxy instance's immutable configuration and request-shared caches.
-
-    The server owns this object and handlers obtain it from ``self.server``.
-    This removes the former process-wide PROV/KEY/RELAY_* mutation, keeps tests
-    isolated, and makes concurrent proxy instances safe inside one interpreter.
-    """
-
-    prov_name: str
-    prov: dict[str, Any]
-    key: str
-    auth_secret: str | None = None
-    shim_mode: str = "off"
-    ultra_mode: str = "off"
-    ultra_ledger: str | None = None
-    relay_models: list[str] = field(default_factory=list)
-    relay_force_model: str | None = None
-    relay_thinking: str | None = None
-# 出站 User-Agent：部分中转站的 WAF 把默认的 "Python-urllib/x.y" 判为 bot 直接 403
+# 出站 User-Agent：部分中转站的 WAF 把 Python 标准库默认 UA 判为 bot 直接 403
 # （byteswarm 实测），故所有上游请求统一带一个非 bot 的 UA。
 UPSTREAM_UA = "CSSwitch/0.2 (+https://github.com/SuperJJ007/CSSwitch)"
-_RETRYABLE_TRANSPORT_ERRORS = (
-    urllib.error.URLError,
-    TimeoutError,
-    ConnectionError,
-    OSError,
-    http.client.HTTPException,
-)
+UpstreamHTTPError = http_transport.UpstreamHTTPError
 
 # ---------- #3: targeted fast-fail（沙箱「Switching organization」卡死修复） ----------
 # 沙箱 Science 启动时会对 claude.ai/api/oauth/profile 发【阻塞式】请求解析组织；
@@ -171,19 +144,16 @@ def http_post(
     """POST 上游；重试覆盖【连接 + 完整读体】（含 SSL EOF、握手超时、对端断开、IncompleteRead），
     对服务端明确响应（HTTPError，如 400）不重试。返回 (body_bytes, content_type)。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
-    for i in range(attempts):
-        req = urllib.request.Request(url, data=data, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read(), r.headers.get("Content-Type", "application/json")
-        except urllib.error.HTTPError:
-            raise
-        except _RETRYABLE_TRANSPORT_ERRORS as e:
-            if i < attempts - 1:
-                log(f"  ~ 上游连接抖动，重试 {i + 1}/{attempts - 1}: {e}")
-                time.sleep(0.8 * (i + 1))
-                continue
-            raise
+    return http_transport.default_transport().post_bytes(
+        url,
+        data,
+        headers,
+        attempts=attempts,
+        timeout=timeout,
+        on_retry=lambda current, total, exc: log(
+            f"  ~ upstream transport retry {current}/{total}: {exc}"
+        ),
+    )
 
 
 def open_stream(
@@ -196,23 +166,16 @@ def open_stream(
     """打开上游流式连接并预读首行（把「200 但立刻空体」这种抖动也纳入重试）。
     返回 (resp, first_chunk, content_type)；首字节到手后不再重试。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
-    for i in range(attempts):
-        req = urllib.request.Request(url, data=data, headers=headers)
-        try:
-            r = urllib.request.urlopen(req, timeout=timeout)
-            first = r.readline(65536)
-            if not first:
-                r.close()
-                raise ConnectionError("上游 200 但立刻空体")
-            return r, first, r.headers.get("Content-Type", "application/json")
-        except urllib.error.HTTPError:
-            raise
-        except _RETRYABLE_TRANSPORT_ERRORS as e:
-            if i < attempts - 1:
-                log(f"  ~ 上游连接抖动，重试 {i + 1}/{attempts - 1}: {e}")
-                time.sleep(0.8 * (i + 1))
-                continue
-            raise
+    return http_transport.default_transport().open_stream(
+        url,
+        data,
+        headers,
+        attempts=attempts,
+        timeout=timeout,
+        on_retry=lambda current, total, exc: log(
+            f"  ~ upstream stream retry {current}/{total}: {exc}"
+        ),
+    )
 
 
 def _open_stream_with_keepalive(
@@ -254,19 +217,15 @@ def http_get_json(
 ) -> Any:
     """GET 上游并解析 JSON（relay 回源拉 /v1/models 用）。连接抖动重试，服务端明确响应不重试。"""
     headers = {"User-Agent": UPSTREAM_UA, **headers}
-    for i in range(attempts):
-        req = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError:
-            raise
-        except Exception as e:
-            if i < attempts - 1:
-                log(f"  ~ 上游连接抖动，重试 {i + 1}/{attempts - 1}: {e}")
-                time.sleep(0.6 * (i + 1))
-                continue
-            raise
+    return http_transport.default_transport().get_json(
+        url,
+        headers,
+        attempts=attempts,
+        timeout=timeout,
+        on_retry=lambda current, total, exc: log(
+            f"  ~ upstream GET retry {current}/{total}: {exc}"
+        ),
+    )
 
 
 def normalize_openai_base(base: str | None) -> str:
@@ -356,7 +315,7 @@ def build_models_response(ctx: RequestContext) -> tuple[int, dict[str, Any]]:
             return 200, {"data": data, "has_more": False,
                          "first_id": data[0]["id"] if data else None,
                          "last_id": data[-1]["id"] if data else None}
-        except urllib.error.HTTPError as e:
+        except UpstreamHTTPError as e:
             detail = ""
             try:
                 detail = e.read().decode("utf-8", "replace")[:200]
@@ -796,17 +755,10 @@ class H(BaseHTTPRequestHandler):
 
     # ---- Ultra：任务路由 + WellFallback + 子代理 guardrails（非流式 v1） ----
     def _handle_ultra(self, areq: dict[str, Any]) -> bool:
-        active_ctx = task_router.current_context(
-            self.ctx.prov_name,
-            self.ctx.prov,
-            self.ctx.key,
-            self.ctx.relay_force_model,
-            self.ctx.relay_thinking,
-        )
         cfg = task_router.load_runtime_config()
         result = ultra_orchestrator.handle_request(
             areq,
-            active_ctx,
+            self.ctx,
             cfg,
             http_post,
             self.ctx.ultra_ledger,
@@ -902,7 +854,7 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(body_bytes)
                 if "rewritten" not in stats:
                     log(f"  <- {self.ctx.prov_name} 非流式透传 OK")
-        except urllib.error.HTTPError as e:
+        except UpstreamHTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:400]
             log(f"  !! 上游 HTTP {e.code}: {detail}")
             if not headers_sent:
@@ -956,7 +908,7 @@ class H(BaseHTTPRequestHandler):
             else:
                 self._send_json(200, aresp)
             log(f"  <- {self.ctx.prov_name} OK (blocks={len(aresp['content'])} stop={aresp['stop_reason']})")
-        except urllib.error.HTTPError as e:
+        except UpstreamHTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:400]
             log(f"  !! 上游 HTTP {e.code}: {detail}")
             # 修 P2（GPT 复审）：OpenAI 翻译路径（qwen 等）同样保留上游 401/403/429，

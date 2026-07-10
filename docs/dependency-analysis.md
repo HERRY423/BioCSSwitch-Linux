@@ -18,9 +18,9 @@
 | WKWebView | 面板 UI（Tauri 用系统 WebView） | ✅ macOS 自带 |
 | Claude Science.app | 沙箱要跑的本体 | ⭘ 目标用户必装 = 给定 |
 | **`node`** | 伪造虚拟 OAuth（`make-virtual-oauth.mjs`） | ❌ **不保证** ← 缺口 |
-| **`python3`** | 翻译代理（`csswitch_proxy.py`，纯标准库、无 pip 依赖） | ❌ **不保证**（见洞察 2） ← 缺口 |
+| **`python3`** | 翻译代理（`csswitch_proxy.py`；`httpx + h2` 随发布包 vendoring） | ❌ **解释器不保证存在**（见洞察 2） ← 缺口 |
 
-代理是**纯 Python 标准库**（无第三方包）→ 只要 python3 能跑就行，不需要 pip install。这也意味着把它移 Rust 时没有隐藏的第三方逻辑要搬。
+代理已从 `urllib` 迁移到共享 `httpx.Client`，获得连接池并在可用时启用 HTTP/2。第三方纯 Python 包由构建脚本放入应用资源，终端用户不需要 `pip install`；从源码运行则通过 `pip install -e .` 安装。剩余缺口仍是系统是否有可用的 Python 3.10+ 解释器，而不是 site-packages。
 
 ## 洞察 1（关键）：缺 node 有两种，PATH 兜底只治其中一种
 

@@ -5,6 +5,8 @@ import argparse
 import unittest
 from unittest import mock
 
+import httpx
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proxy"))
 import csswitch_proxy as cs
 
@@ -68,20 +70,24 @@ class BuildContext(unittest.TestCase):
 
 
 class HttpRetryBoundary(unittest.TestCase):
-    @mock.patch.object(cs.time, "sleep")
-    @mock.patch.object(cs.urllib.request, "urlopen")
-    def test_retries_transport_errors(self, urlopen, _sleep):
-        urlopen.side_effect = ConnectionError("reset")
-        with self.assertRaises(ConnectionError):
-            cs.http_post("https://example.invalid", b"{}", {}, attempts=3)
-        self.assertEqual(urlopen.call_count, 3)
+    @mock.patch.object(cs.http_transport.time, "sleep")
+    def test_retries_transport_errors(self, _sleep):
+        client = mock.Mock()
+        client.post.side_effect = httpx.ConnectError("reset")
+        transport = cs.http_transport.HTTPTransport(client=client)
+        with mock.patch.object(cs.http_transport, "default_transport", return_value=transport):
+            with self.assertRaises(httpx.ConnectError):
+                cs.http_post("https://example.invalid", b"{}", {}, attempts=3)
+        self.assertEqual(client.post.call_count, 3)
 
-    @mock.patch.object(cs.urllib.request, "urlopen")
-    def test_does_not_retry_programming_errors(self, urlopen):
-        urlopen.side_effect = ValueError("bad request construction")
-        with self.assertRaises(ValueError):
-            cs.http_post("https://example.invalid", b"{}", {}, attempts=4)
-        self.assertEqual(urlopen.call_count, 1)
+    def test_does_not_retry_programming_errors(self):
+        client = mock.Mock()
+        client.post.side_effect = ValueError("bad request construction")
+        transport = cs.http_transport.HTTPTransport(client=client)
+        with mock.patch.object(cs.http_transport, "default_transport", return_value=transport):
+            with self.assertRaises(ValueError):
+                cs.http_post("https://example.invalid", b"{}", {}, attempts=4)
+        self.assertEqual(client.post.call_count, 1)
 
 
 class ToolChoiceMapping(unittest.TestCase):
@@ -315,9 +321,8 @@ class RelayProvider(unittest.TestCase):
         self.assertEqual([m["id"] for m in body["data"]], ["glm-4.6"])
 
     def test_build_models_response_preserves_upstream_status(self):
-        import urllib.error, io
         def boom(url, headers):
-            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(b"nope"))
+            raise cs.UpstreamHTTPError(401, b"nope", "Unauthorized")
         orig = cs.http_get_json
         cs.http_get_json = boom
         try:

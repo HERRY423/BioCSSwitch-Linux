@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -51,6 +52,85 @@ def _sha16(s: str) -> str:
     return hashlib.sha256((s or "").encode("utf-8")).hexdigest()[:32]
 
 
+_PHI_SCAN = None
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _get_phi_scan():
+    global _PHI_SCAN
+    if _PHI_SCAN is False:
+        return None
+    if _PHI_SCAN is not None:
+        return _PHI_SCAN
+    try:
+        phi_path = Path(__file__).with_name("phi_server.py")
+        spec = importlib.util.spec_from_file_location("_bio_privacy_phi_for_audit", phi_path)
+        if spec is None or spec.loader is None:
+            _PHI_SCAN = False
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PHI_SCAN = mod.phi_scan
+        return _PHI_SCAN
+    except Exception:
+        _PHI_SCAN = False
+        return None
+
+
+def _redact_phi_text(text: str, min_confidence: str = "high") -> tuple[str, List[Dict[str, Any]]]:
+    text = text or ""
+    scan_fn = _get_phi_scan()
+    if scan_fn is None or not text:
+        return text, []
+    try:
+        scan = scan_fn(text=text)
+    except Exception:
+        return text, []
+    min_rank = _CONFIDENCE_RANK.get(min_confidence, 2)
+    findings = [
+        f for f in scan.get("findings", [])
+        if "start" in f and _CONFIDENCE_RANK.get(f.get("confidence", "low"), 0) >= min_rank
+    ]
+    if not findings:
+        return text, []
+    counts: Dict[str, int] = {}
+    redacted = text
+    for f in sorted(findings, key=lambda item: item["start"], reverse=True):
+        kind = str(f.get("kind") or "PHI")
+        counts[kind] = counts.get(kind, 0) + 1
+        token = f"[REDACTED_{kind}_{counts[kind]}]"
+        redacted = redacted[: f["start"]] + token + redacted[f["end"] :]
+    meta = [
+        {"kind": f.get("kind"), "confidence": f.get("confidence")}
+        for f in findings
+    ]
+    return redacted, meta
+
+
+def _clean_extra_value(value: Any, warnings: List[Dict[str, Any]], path: str) -> Any:
+    if isinstance(value, str):
+        clean, findings = _redact_phi_text(value)
+        if findings:
+            warnings.append({"field": path, "redacted": len(findings)})
+        if len(clean) > 200:
+            return clean[:200] + "...[truncated]"
+        return clean
+    if isinstance(value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key, key_findings = _redact_phi_text(str(key))
+            if key_findings:
+                warnings.append({"field": f"{path}.<key>", "redacted": len(key_findings)})
+            cleaned[safe_key] = _clean_extra_value(item, warnings, f"{path}.{safe_key}")
+        return cleaned
+    if isinstance(value, list):
+        return [
+            _clean_extra_value(item, warnings, f"{path}[{idx}]")
+            for idx, item in enumerate(value)
+        ]
+    return value
+
+
 @server.tool(
     "audit_log_write",
     "Append one audit entry to the local audit log. "
@@ -74,12 +154,16 @@ def _sha16(s: str) -> str:
 def audit_log_write(event: str, provider: str = "", model: str = "",
                     summary: str = "", phi_summary: Dict[str, Any] | None = None,
                     input_sample: str | None = None, extra: Dict[str, Any] | None = None):
+    privacy_warnings: List[Dict[str, Any]] = []
+    safe_summary, summary_findings = _redact_phi_text((summary or "")[:200])
+    if summary_findings:
+        privacy_warnings.append({"field": "summary", "redacted": len(summary_findings)})
     entry: Dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "event": event,
         "provider": provider or None,
         "model": model or None,
-        "summary": (summary or "")[:200],
+        "summary": safe_summary[:200],
     }
     if phi_summary:
         entry["phi"] = {
@@ -95,11 +179,13 @@ def audit_log_write(event: str, provider: str = "", model: str = "",
         # 防止调用方误传 raw text 到 extra 里：值超过 200 字符就截断并标记。
         clean = {}
         for k, v in extra.items():
-            if isinstance(v, str) and len(v) > 200:
-                clean[k] = v[:200] + "…[truncated]"
-            else:
-                clean[k] = v
+            safe_key, key_findings = _redact_phi_text(str(k))
+            if key_findings:
+                privacy_warnings.append({"field": "extra.<key>", "redacted": len(key_findings)})
+            clean[safe_key] = _clean_extra_value(v, privacy_warnings, f"extra.{safe_key}")
         entry["extra"] = clean
+    if privacy_warnings:
+        entry["privacy_warnings"] = privacy_warnings
 
     dst = _today_file()
     dst.parent.mkdir(parents=True, exist_ok=True)

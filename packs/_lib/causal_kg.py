@@ -207,9 +207,13 @@ def normalize_triple(triple: Dict[str, Any], source: str = "manual") -> Optional
     if isinstance(evidence, str):
         evidence = [evidence]
     context = str(triple.get("context") or "").strip()
-    experiments = triple.get("experiment_type") or []
+    experiments = triple.get("experiment_type") or triple.get("method") or []
     if isinstance(experiments, str):
         experiments = [experiments]
+    recorded_timestamp = triple.get("timestamp")
+    timestamp_origin = triple.get("timestamp_origin") or (
+        "provided" if recorded_timestamp else "generated_at_normalization"
+    )
     out = {
         "id": str(triple.get("id") or _edge_id(subject, relation, obj, context, evidence)),
         "subject": {
@@ -226,14 +230,38 @@ def normalize_triple(triple: Dict[str, Any], source: str = "manual") -> Optional
         "direction": triple.get("direction") or relation_direction(relation),
         "context": context,
         "experiment_type": list(dict.fromkeys(str(x) for x in experiments if x)),
-        "model_system": triple.get("model_system"),
+        "model_system": triple.get("model_system") or triple.get("model"),
         "evidence": list(dict.fromkeys(str(x) for x in evidence if x)),
         "confidence": round(float(triple.get("confidence", 0.5)), 2),
-        "timestamp": triple.get("timestamp") or _now_iso(),
+        "timestamp": recorded_timestamp or _now_iso(),
+        "timestamp_origin": timestamp_origin,
         "source": triple.get("source") or source,
     }
     if triple.get("claim_text"):
         out["claim_text"] = str(triple["claim_text"])[:600]
+    # Optional study descriptors are preserved verbatim so downstream conflict
+    # adjudication can test effect modification instead of flattening every
+    # claim to subject/relation/object/context.  They remain optional to keep
+    # the durable JSONL schema backwards compatible.
+    for field in (
+        "species",
+        "population",
+        "disease_stage",
+        "tissue",
+        "cell_state",
+        "dose",
+        "endpoint",
+        "study_design",
+        "sample_size",
+        "effect_size",
+        "uncertainty",
+        "evidence_snippet",
+        "provenance",
+    ):
+        if field in triple and triple[field] not in (None, ""):
+            out[field] = triple[field]
+    if triple.get("timepoint") not in (None, "") or triple.get("time") not in (None, ""):
+        out["timepoint"] = triple.get("timepoint") or triple.get("time")
     return out
 
 

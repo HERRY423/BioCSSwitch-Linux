@@ -12,8 +12,26 @@ import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import provider_registry
+from request_context import RequestContext
+
 
 TASK_RULES = {
+    "crossmodal-discovery": [
+        "cross-modal", "cross modal", "multimodal integration", "unmet clinical need",
+        "integrated target discovery", "evidence fusion", "跨模态", "多模态整合",
+        "未满足临床需求", "统一推理", "证据融合", "跨组学靶点",
+    ],
+    "hypothesis-generation": [
+        "hypothesis generator", "generate hypotheses", "conflicting evidence",
+        "contradictory evidence", "discriminating experiment", "rival hypotheses",
+        "假设生成", "矛盾证据", "冲突文献", "竞争假设", "区分性实验",
+    ],
+    "research-partner": [
+        "research partner", "interest model", "research profile", "proactive briefing",
+        "personalized research", "workflow prediction", "研究伙伴", "兴趣模型",
+        "研究画像", "主动简报", "个性化研究", "工作流预测",
+    ],
     "scientific-debate": [
         "scientific debate", "debate arena", "multi-agent debate", "adversarial review",
         "argue both sides", "opposing agents", "structured debate", "uncertainty quantification",
@@ -55,6 +73,9 @@ TASK_RULES = {
 }
 
 TASK_PROBES = {
+    "crossmodal-discovery": ["tool_use", "long_ctx", "json_stable"],
+    "hypothesis-generation": ["tool_use", "json_stable", "long_ctx"],
+    "research-partner": ["tool_use", "json_stable"],
     "scientific-debate": ["json_stable", "long_ctx"],
     "clinical-trials": ["tool_use"],
     "target-discovery": ["tool_use"],
@@ -188,63 +209,82 @@ def profile_by_id(config: Dict[str, Any], profile_id: str) -> Optional[Dict[str,
     return None
 
 
-def context_from_profile(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    tid = profile.get("template_id") or "custom"
+def context_from_profile(profile: Dict[str, Any]) -> Optional[RequestContext]:
+    """Build the shared typed context from one persisted desktop profile."""
+
+    tid = str(profile.get("template_id") or "custom")
     rt = TEMPLATE_RUNTIME.get(tid, TEMPLATE_RUNTIME["custom"])
-    adapter = rt["adapter"]
-    key = profile.get("api_key") or profile.get("key") or ""
+    adapter = str(rt["adapter"])
+    key = str(profile.get("api_key") or profile.get("key") or "")
     if not key:
         return None
-    ctx = {
-        "profile_id": profile.get("id") or "",
-        "profile_name": profile.get("name") or profile.get("id") or "profile",
-        "template_id": tid,
-        "provider": adapter,
-        "mode": rt.get("mode") or ("openai" if adapter == "qwen" else "anthropic"),
-        "key": key,
-        "key_env": rt.get("key_env") or ("CSSWITCH_RELAY_KEY" if adapter == "relay" else ""),
-        "model": profile.get("model") or "",
-        "thinking_policy": rt.get("thinking_policy", ""),
-        "base_url": profile.get("base_url") or "",
-    }
+
+    prov = dict(provider_registry.PROVIDERS.get(adapter) or {})
+    prov["mode"] = rt.get("mode") or (
+        "openai" if adapter == "qwen" else "anthropic"
+    )
+    prov["key_env"] = rt.get("key_env") or (
+        "CSSWITCH_RELAY_KEY" if adapter == "relay" else prov.get("key_env", "")
+    )
+    base_url = str(profile.get("base_url") or "")
     if adapter == "relay":
-        base = (ctx["base_url"] or "").rstrip("/")
+        base = base_url.rstrip("/")
         if not re.match(r"^https?://", base):
             return None
-        ctx["url"] = base + "/v1/messages"
-        ctx["models_url"] = base + "/v1/models"
-        ctx["auth_style"] = "both"
+        prov["url"] = base + "/v1/messages"
+        prov["models_url"] = base + "/v1/models"
+        prov["auth_style"] = "both"
     elif adapter in {"openai-custom", "openai-responses"}:
-        base = normalize_openai_base(ctx["base_url"])
+        base = normalize_openai_base(base_url)
         if not re.match(r"^https?://", base):
             return None
         suffix = "/responses" if adapter == "openai-responses" else "/chat/completions"
-        ctx["url"] = openai_endpoint(base, suffix)
-        ctx["models_url"] = openai_endpoint(base, "/models")
-        ctx["auth_style"] = "bearer"
+        prov["url"] = openai_endpoint(base, suffix)
+        prov["models_url"] = openai_endpoint(base, "/models")
+        prov["auth_style"] = "bearer"
     else:
-        ctx["url"] = rt["url"]
-        ctx["auth_style"] = "bearer" if adapter == "qwen" else "x-api-key"
-    return ctx
+        prov["url"] = rt["url"]
+        prov["auth_style"] = "bearer" if adapter == "qwen" else "x-api-key"
+
+    return RequestContext(
+        prov_name=adapter,
+        prov=prov,
+        key=key,
+        relay_force_model=str(profile.get("model") or "") or None,
+        relay_thinking=str(rt.get("thinking_policy") or "") or None,
+        profile_id=str(profile.get("id") or ""),
+        profile_name=str(profile.get("name") or profile.get("id") or "profile"),
+        template_id=tid,
+        base_url=base_url,
+    )
 
 
-def current_context(provider: str, prov: Dict[str, Any], key: str,
-                    force_model: Optional[str] = None, thinking_policy: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "profile_id": "active",
-        "profile_name": provider or "active",
-        "template_id": provider or "active",
-        "provider": provider,
-        "mode": prov.get("mode", "anthropic"),
-        "url": prov.get("url"),
-        "models_url": prov.get("models_url"),
-        "key": key,
-        "model": force_model or "",
-        "thinking_policy": thinking_policy or "",
-        "auth_style": prov.get("auth_style", "x-api-key" if provider != "qwen" else "bearer"),
-        "base_url": "",
-        "prov": prov,
-    }
+def current_context(
+    provider: str,
+    prov: Dict[str, Any],
+    key: str,
+    force_model: Optional[str] = None,
+    thinking_policy: Optional[str] = None,
+) -> RequestContext:
+    """Adapt an already-running proxy provider into the shared context type."""
+
+    snapshot = dict(prov)
+    snapshot.setdefault(
+        "key_env", "CSSWITCH_RELAY_KEY" if provider == "relay" else ""
+    )
+    snapshot.setdefault(
+        "auth_style", "bearer" if provider == "qwen" else "x-api-key"
+    )
+    return RequestContext(
+        prov_name=provider,
+        prov=snapshot,
+        key=key,
+        relay_force_model=force_model,
+        relay_thinking=thinking_policy,
+        profile_id="active",
+        profile_name=provider or "active",
+        template_id=provider or "active",
+    )
 
 
 def probe_verdict(config: Dict[str, Any], profile_id: str, probe: str) -> str:
@@ -301,7 +341,7 @@ def _add_ordered(target: List[Dict[str, str]], profile_ids: Iterable[str], sourc
             target.append({"profile_id": str(pid), "source": source})
 
 
-def route_plan(config: Dict[str, Any], task_id: str, active_ctx: Dict[str, Any],
+def route_plan(config: Dict[str, Any], task_id: str, active_ctx: RequestContext,
                failure_kind: Optional[str] = None) -> Dict[str, Any]:
     """Return route candidates plus diagnostics derived from config state."""
     routes = config.get("task_routes") or {}
@@ -328,7 +368,7 @@ def route_plan(config: Dict[str, Any], task_id: str, active_ctx: Dict[str, Any],
         if pid:
             _add_ordered(ordered, [pid], "last_resort")
 
-    out: List[Dict[str, Any]] = []
+    out: List[RequestContext] = []
     candidates: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     seen = set()
@@ -357,25 +397,22 @@ def route_plan(config: Dict[str, Any], task_id: str, active_ctx: Dict[str, Any],
             })
             continue
         degraded = any(p.get("verdict") == "degraded" for p in probes)
-        ctx["_route_source"] = item["source"]
-        ctx["_probe_results"] = probes
+        ctx = ctx.routed(item["source"], probes)
         candidates.append({
             "profile_id": pid,
-            "profile_name": ctx.get("profile_name", ""),
+            "profile_name": ctx.profile_name,
             "source": item["source"],
             "probe_status": "degraded" if degraded else "ok",
             "probes": probes,
         })
         out.append(ctx)
 
-    if not out and active_ctx:
-        active = dict(active_ctx)
-        active["_route_source"] = "runtime_active"
-        active["_probe_results"] = []
+    if not out:
+        active = active_ctx.routed("runtime_active")
         out.append(active)
         candidates.append({
-            "profile_id": active.get("profile_id", "active"),
-            "profile_name": active.get("profile_name", "active"),
+            "profile_id": active.profile_id,
+            "profile_name": active.profile_name,
             "source": "runtime_active",
             "probe_status": "unknown",
             "probes": [],
@@ -396,18 +433,18 @@ def route_plan(config: Dict[str, Any], task_id: str, active_ctx: Dict[str, Any],
     }
 
 
-def route_contexts(config: Dict[str, Any], task_id: str, active_ctx: Dict[str, Any],
-                   failure_kind: Optional[str] = None) -> List[Dict[str, Any]]:
+def route_contexts(config: Dict[str, Any], task_id: str, active_ctx: RequestContext,
+                   failure_kind: Optional[str] = None) -> List[RequestContext]:
     return route_plan(config, task_id, active_ctx, failure_kind=failure_kind)["contexts"]
 
 
-def host_from_context(ctx: Dict[str, Any]) -> str:
-    url = ctx.get("url") or ctx.get("base_url") or ""
+def host_from_context(ctx: RequestContext) -> str:
+    url = ctx.url or ctx.base_url
     m = re.match(r"^https?://([^/:?#]+)", url)
     return (m.group(1) if m else "").lower()
 
 
-def is_local_or_allowed(ctx: Dict[str, Any], allowed_hosts: Iterable[str]) -> bool:
+def is_local_or_allowed(ctx: RequestContext, allowed_hosts: Iterable[str]) -> bool:
     host = host_from_context(ctx)
     allowed = {h.strip().lower() for h in allowed_hosts or [] if h.strip()}
     if host in allowed:

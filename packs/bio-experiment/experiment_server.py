@@ -659,7 +659,7 @@ def agentic_experiment_plan(
         "plan_id": _hash(plan_core)[:24],
         "workflow": [
             {"step": 1, "name": "literature_gap_lock", "handoff": "bio-lit + bio-audit evidence_graph; record unresolved gaps"},
-            {"step": 2, "name": "hypothesis_generation", "handoff": "multi-agent debate can propose rival hypotheses; choose testable one"},
+            {"step": 2, "name": "hypothesis_generation", "handoff": "use bio-critique or an explicitly configured debate workflow to compare rival hypotheses; choose a testable one"},
             {"step": 3, "name": "testability_gate", "result": testability["grade"]},
             {"step": 4, "name": "a_priori_power", "result": power_result},
             {"step": 5, "name": "eln_protocol", "result": "protocol_sections"},

@@ -21,6 +21,9 @@ target/
 node_modules/
 dist/
 build/
+python-vendor/*
+!python-vendor/README.md
+python-vendor.tmp/
 
 # macOS 与工作区杂物
 .DS_Store

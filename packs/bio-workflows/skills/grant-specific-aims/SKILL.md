@@ -56,6 +56,7 @@ Impact if successful: [1 句]
 - **靶点选择理由**（若涉及基因/蛋白）：`ot_target_associated_diseases` + `chembl_target_search` 证明"这个靶点有可 drug 化基础"
 - **临床相关性**：`ctgov_search` 找当前的临床试验 landscape，Aim 3 里可以说"our findings would inform ongoing trials such as NCT..."
 - **术语规范化**：`disambiguate` 检查你写的 gene symbol / disease name 是否有歧义——NSFC 中英文对照要求精确对应，同名歧义会被专家扣分。
+- **提交前引用扫雷**：对最终 aims / significance 草稿运行 `packs/bio-audit/evidence_linter.py --strict <draft.md>`；任何 PMID / DOI / NCT 未通过验证都必须撤回或改写。基金申请里的假 PMID 比普通 rebuttal 更伤信用。
 
 ## Do / Don't
 

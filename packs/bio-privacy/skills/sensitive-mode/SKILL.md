@@ -83,7 +83,7 @@ C. 我使用的是本地 / 机构端点（非公开 API），可原文继续
 
 - **别猜姓名**。正则会漏中文姓名 + 部分西文姓名；用户提供的段落里凡是"Title-case + Title-case"或"中文姓氏 + 头衔"结构，**默认当姓名处理**，让 phi_scan 补一个 `NAME_TITLECASE` 也算 hit。
 - **别忽视间接 identifier**。"63 岁 男性 心内科 住院 3 天"看似无 identifier，但小样本人群下（罕见病 + 特定医院）足以再识别（re-identification）。碰到罕见病 / 罕见组合 + 医院名 → 视同高置信度 PHI。
-- **别把审计日志用来存原文**。`audit_log_write.input_sample` 参数会被 SHA-256 后丢弃——但你如果把原文塞进 `summary` 或 `extra`，就是自己作弊。工具会截断超长 `extra` 值，但语义合规靠你自己。
+- **别把审计日志用来存原文**。`audit_log_write.input_sample` 参数会被 SHA-256 后丢弃；`summary` 与 `extra` 会在写入前再次跑 PHI 扫描并打码高置信命中，但这只是防御层，不能当作保存原文的通道。工具仍会截断超长 `extra` 值。
 
 ## 与其它 Skill 的关系
 

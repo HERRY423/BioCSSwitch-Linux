@@ -1,0 +1,52 @@
+{
+  "id": "bio-crossmodal",
+  "name": "Cross-modal biomedical discovery",
+  "description": "Orchestrates literature, gene, drug, clinical-trial, single-cell, and spatial packs through a shared evidence context. It cross-validates claims, keeps missing evidence as unknown, and ranks investigation targets with explicit coverage and provenance.",
+  "version": "0.1.0",
+  "dependencies": [
+    "bio-lit",
+    "bio-audit",
+    "bio-gene",
+    "bio-drug",
+    "bio-trials",
+    "bio-singlecell",
+    "bio-sc-downstream",
+    "bio-spatial",
+    "bio-kg"
+  ],
+  "depends_on": [
+    "bio-lit",
+    "bio-audit",
+    "bio-gene",
+    "bio-drug",
+    "bio-trials",
+    "bio-singlecell",
+    "bio-sc-downstream",
+    "bio-spatial",
+    "bio-kg"
+  ],
+  "requires_tools": [
+    {
+      "name": "python3",
+      "kind": "runtime",
+      "required": true,
+      "purpose": "Run the local cross-modal MCP server"
+    }
+  ],
+  "requires_env": [],
+  "optional_env": [],
+  "task_tags": ["crossmodal-discovery", "target-discovery", "tool-heavy"],
+  "servers": [
+    {
+      "name": "bio-crossmodal",
+      "script": "packs/bio-crossmodal/crossmodal_server.py",
+      "env_pass": []
+    }
+  ],
+  "skills": [
+    {
+      "id": "crossmodal-discovery",
+      "src": "packs/bio-crossmodal/skills/crossmodal-discovery"
+    }
+  ]
+}

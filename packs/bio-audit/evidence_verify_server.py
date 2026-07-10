@@ -650,6 +650,38 @@ def _derive_missing_data(claim: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _boundary_note_en(note: str) -> str:
+    if not note:
+        return ""
+    if "混合" in note:
+        return "mixed human and preclinical evidence"
+    if "临床前" in note or "動物" in note or "动物" in note or "体外" in note:
+        return "preclinical evidence only"
+    if "人类" in note or "人体" in note:
+        return "human evidence"
+    if "物种不明" in note:
+        return "species unclear"
+    return note
+
+
+def _conflict_note_en(note: str) -> str:
+    """Translate the fixed Chinese conflict templates emitted by evidence_graph."""
+    missing = re.fullmatch(r"引用 (\S+) 不存在（(.+)）——不可作为证据", note)
+    if missing:
+        reason = missing.group(2).replace("上游", "upstream")
+        return f"Citation {missing.group(1)} does not exist ({reason}) and cannot be used as evidence."
+    mismatch = re.fullmatch(r"错配：claim 断言人类，但支持证据 (\S+) 实为 (\S+)（(.*)）", note)
+    if mismatch:
+        return (
+            "Applicability mismatch: the claim asserts human evidence, but supporting citation "
+            f"{mismatch.group(1)} is {mismatch.group(2)} ({mismatch.group(3)})."
+        )
+    counter = re.fullmatch(r"存在反证：(\d+) 条引用与结论方向相反", note)
+    if counter:
+        return f"Counter-evidence exists: {counter.group(1)} citation(s) point in the opposite direction."
+    return note
+
+
 @server.tool(
     "uncertainty_ledger",
     "Compile the mandatory uncertainty panel every research workflow must expose: "
@@ -685,6 +717,7 @@ def uncertainty_ledger(graph_claims: List[Dict[str, Any]],
                        question: str = "", extra: Optional[Dict[str, Any]] = None,
                        language: str = "zh"):
     extra = extra or {}
+    is_en = language == "en"
     known_knowns: List[str] = []
     known_unknowns: List[str] = []
     conflicts: List[str] = []
@@ -699,29 +732,68 @@ def uncertainty_ledger(graph_claims: List[Dict[str, Any]],
         if verdict == "supported":
             boundary_bits = []
             if b.get("species_note"):
-                boundary_bits.append(b["species_note"])
+                boundary_bits.append(
+                    _boundary_note_en(b["species_note"]) if is_en else b["species_note"]
+                )
             if b.get("disease_stage"):
-                boundary_bits.append("阶段: " + ", ".join(b["disease_stage"]))
+                prefix = "stage: " if is_en else "阶段: "
+                boundary_bits.append(prefix + ", ".join(b["disease_stage"]))
             if b.get("max_sample_size"):
-                boundary_bits.append(f"n≤{b['max_sample_size']}")
-            known_knowns.append(
-                f"{claim_txt} —— 证据等级 {level}"
-                + (f"；适用边界：{'；'.join(boundary_bits)}" if boundary_bits else ""))
+                boundary_bits.append(
+                    f"n up to {b['max_sample_size']}" if is_en else f"n≤{b['max_sample_size']}"
+                )
+            if is_en:
+                suffix = f"; applicability boundary: {'; '.join(boundary_bits)}" if boundary_bits else ""
+                known_knowns.append(f"{claim_txt} — evidence level: {level}{suffix}")
+            else:
+                known_knowns.append(
+                    f"{claim_txt} —— 证据等级 {level}"
+                    + (f"；适用边界：{'；'.join(boundary_bits)}" if boundary_bits else ""))
         elif verdict == "unsupported":
-            known_unknowns.append(f"{claim_txt} —— 无有效引用支持，尚不能确证")
+            known_unknowns.append(
+                f"{claim_txt} — no valid citation supports this claim yet."
+                if is_en else f"{claim_txt} —— 无有效引用支持，尚不能确证"
+            )
         elif verdict == "contested":
-            known_knowns.append(f"{claim_txt}（有争议，见 Conflicts）—— 证据等级 {level}")
+            known_knowns.append(
+                f"{claim_txt} (contested; see Conflicts) — evidence level: {level}"
+                if is_en else f"{claim_txt}（有争议，见 Conflicts）—— 证据等级 {level}"
+            )
         for conf in c.get("conflicts", []) or []:
-            conflicts.append(conf)
+            conflicts.append(_conflict_note_en(conf) if is_en else conf)
         for ce in c.get("counter_evidence", []) or []:
-            conflicts.append(f"反证：{ce.get('id_type','').upper()}:{ce.get('id')} "
-                             f"（{ce.get('label') or '类型不明'}）与「{claim_txt[:30]}」相反")
-        missing_data.extend(_derive_missing_data(c))
+            if is_en:
+                conflicts.append(
+                    f"Counter-evidence: {ce.get('id_type','').upper()}:{ce.get('id')} "
+                    f"({ce.get('label') or 'type unclear'}) conflicts with '{claim_txt[:30]}'."
+                )
+            else:
+                conflicts.append(f"反证：{ce.get('id_type','').upper()}:{ce.get('id')} "
+                                 f"（{ce.get('label') or '类型不明'}）与「{claim_txt[:30]}」相反")
+        if is_en and verdict != "unsupported":
+            if _boundary_note_en(b.get("species_note", "")) == "preclinical evidence only":
+                missing_data.append(
+                    f"'{claim_txt[:40]}' lacks direct human evidence; current support is animal and/or in-vitro."
+                )
+            if not b.get("max_sample_size"):
+                missing_data.append(
+                    f"'{claim_txt[:40]}' lacks a reported sample size, so statistical power cannot be judged."
+                )
+            if not b.get("disease_stage"):
+                missing_data.append(f"'{claim_txt[:40]}' does not define disease stage or patient strata.")
+        elif not is_en:
+            missing_data.extend(_derive_missing_data(c))
         # 自动建议下一步实验
         if verdict == "unsupported":
-            next_experiments.append(f"为「{claim_txt[:40]}」补一条可核对的一手证据（PMID/NCT），否则撤回")
-        elif b.get("species_note", "").startswith("仅临床前"):
-            next_experiments.append(f"设计人体研究验证「{claim_txt[:40]}」（当前仅临床前）")
+            next_experiments.append(
+                f"Find one verifiable primary source (PMID/NCT) for '{claim_txt[:40]}' or retract the claim."
+                if is_en else f"为「{claim_txt[:40]}」补一条可核对的一手证据（PMID/NCT），否则撤回"
+            )
+        elif _boundary_note_en(b.get("species_note", "")) == "preclinical evidence only":
+            next_experiments.append(
+                f"Design a human validation study for '{claim_txt[:40]}'; current evidence is preclinical."
+                if is_en else f"设计人体研究验证「{claim_txt[:40]}」（当前仅临床前）"
+            )
 
     # 合并模型补充
     known_unknowns += list(extra.get("known_unknowns") or [])
@@ -744,7 +816,6 @@ def uncertainty_ledger(graph_claims: List[Dict[str, Any]],
         "missing_data": _dedup(missing_data),
         "next_experiment": _dedup(next_experiments),
     }
-
     # 渲染 Markdown
     titles_zh = {
         "known_knowns": "✅ Known knowns（已知已确证）",
@@ -753,15 +824,26 @@ def uncertainty_ledger(graph_claims: List[Dict[str, Any]],
         "missing_data": "🕳️ Missing data（缺失数据 / 盲区）",
         "next_experiment": "🔬 Next experiment（下一步实验建议）",
     }
-    lines = ["## 不确定性面板（Uncertainty Panel）"]
+    titles_en = {
+        "known_knowns": "Known knowns",
+        "known_unknowns": "Known unknowns",
+        "conflicts": "Conflicts",
+        "missing_data": "Missing data",
+        "next_experiment": "Next experiment",
+    }
+    titles = titles_en if is_en else titles_zh
+    lines = ["## Uncertainty Panel" if is_en else "## 不确定性面板（Uncertainty Panel）"]
     if question:
-        lines.append(f"> 研究问题：{question}")
+        lines.append(f"> Research question: {question}" if is_en else f"> 研究问题：{question}")
     for key in ("known_knowns", "known_unknowns", "conflicts", "missing_data", "next_experiment"):
         lines.append("")
-        lines.append(f"### {titles_zh[key]}")
+        lines.append(f"### {titles[key]}")
         items = ledger[key]
         if not items:
-            lines.append("- （无 —— 若本应有内容而为空，说明检索/审计尚不充分）")
+            lines.append(
+                "- (none recorded; if this section should contain evidence, retrieval/audit is still incomplete.)"
+                if is_en else "- （无 —— 若本应有内容而为空，说明检索/审计尚不充分）"
+            )
         else:
             for it in items:
                 lines.append(f"- {it}")

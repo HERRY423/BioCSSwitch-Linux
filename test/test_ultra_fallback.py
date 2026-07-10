@@ -1,10 +1,8 @@
-import io
 import json
 import os
 import sys
 import tempfile
 import unittest
-import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "proxy"))
 
@@ -59,6 +57,13 @@ class FallbackPolicyTests(unittest.TestCase):
 
 
 class TaskRouterTests(unittest.TestCase):
+    def test_router_and_ultra_share_the_request_context_type(self):
+        active = task_router.current_context(
+            "deepseek", {"mode": "anthropic", "url": "https://example.invalid"}, "sk-test"
+        )
+        self.assertIsInstance(active, ultra.RequestContext)
+        self.assertFalse(hasattr(active, "get"))
+
     def test_detects_clinical_trials_task(self):
         req = {"messages": [{"role": "user", "content": "Find NCT clinical trial endpoints for GBM"}]}
         self.assertEqual(task_router.detect_task(req), "clinical-trials")
@@ -78,7 +83,7 @@ class TaskRouterTests(unittest.TestCase):
         }
         active = task_router.current_context("deepseek", {"mode": "anthropic", "url": "u"}, "sk-active")
         routes = task_router.route_contexts(cfg, "clinical-trials", active)
-        self.assertEqual(routes[0]["profile_id"], "p2")
+        self.assertEqual(routes[0].profile_id, "p2")
 
     def test_route_plan_uses_failure_route_and_probe_diagnostics(self):
         cfg = {
@@ -96,7 +101,7 @@ class TaskRouterTests(unittest.TestCase):
         }
         active = task_router.current_context("deepseek", {"mode": "anthropic", "url": "u"}, "sk-active")
         plan = task_router.route_plan(cfg, "clinical-trials", active, failure_kind=fp.RATE_LIMIT)
-        self.assertEqual([c["profile_id"] for c in plan["contexts"][:2]], ["p1", "p2"])
+        self.assertEqual([c.profile_id for c in plan["contexts"][:2]], ["p1", "p2"])
         self.assertEqual(plan["candidates"][2]["probe_status"], "degraded")
 
     def test_custom_openai_profile_uses_openai_chat_context(self):
@@ -109,11 +114,11 @@ class TaskRouterTests(unittest.TestCase):
             "name": "openai chat",
         }
         ctx = task_router.context_from_profile(profile)
-        self.assertEqual(ctx["provider"], "openai-custom")
-        self.assertEqual(ctx["mode"], "openai")
-        self.assertEqual(ctx["url"], "https://example.com/v1/chat/completions")
-        self.assertEqual(ctx["models_url"], "https://example.com/v1/models")
-        self.assertEqual(ctx["auth_style"], "bearer")
+        self.assertEqual(ctx.provider, "openai-custom")
+        self.assertEqual(ctx.mode, "openai")
+        self.assertEqual(ctx.url, "https://example.com/v1/chat/completions")
+        self.assertEqual(ctx.models_url, "https://example.com/v1/models")
+        self.assertEqual(ctx.auth_style, "bearer")
 
     def test_custom_openai_responses_profile_uses_responses_context(self):
         profile = {
@@ -125,11 +130,11 @@ class TaskRouterTests(unittest.TestCase):
             "name": "openai responses",
         }
         ctx = task_router.context_from_profile(profile)
-        self.assertEqual(ctx["provider"], "openai-responses")
-        self.assertEqual(ctx["mode"], "openai")
-        self.assertEqual(ctx["url"], "https://example.com/v1/responses")
-        self.assertEqual(ctx["models_url"], "https://example.com/v1/models")
-        self.assertEqual(ctx["auth_style"], "bearer")
+        self.assertEqual(ctx.provider, "openai-responses")
+        self.assertEqual(ctx.mode, "openai")
+        self.assertEqual(ctx.url, "https://example.com/v1/responses")
+        self.assertEqual(ctx.models_url, "https://example.com/v1/models")
+        self.assertEqual(ctx.auth_style, "bearer")
 
     def test_chinese_requests_are_classified(self):
         cases = [
@@ -183,7 +188,7 @@ class UltraOrchestratorTests(unittest.TestCase):
         def fake_post(url, data, headers):
             calls.append((url, headers))
             if headers.get("x-api-key") == "sk-p1":
-                raise urllib.error.HTTPError(url, 429, "rate", {}, io.BytesIO(b"rate limit"))
+                raise ultra.UpstreamHTTPError(429, b"rate limit", "rate")
             return json.dumps({
                 "id": "chatcmpl",
                 "choices": [{"message": {"content": "fallback answer"}, "finish_reason": "stop"}],
@@ -353,7 +358,7 @@ class UltraEndToEndAcceptanceTests(unittest.TestCase):
             key = headers.get("x-api-key") or headers.get("Authorization")
             calls.append(key)
             if key == "sk-p1":
-                raise urllib.error.HTTPError(url, 429, "rate", {}, io.BytesIO(b"rate limit"))
+                raise ultra.UpstreamHTTPError(429, b"rate limit", "rate")
             if key == "Bearer sk-p3":
                 raise AssertionError("generic fallback ran before the rate-limit route")
             return json.dumps({
