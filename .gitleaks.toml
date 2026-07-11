@@ -29,4 +29,5 @@ regexes = [
   '''sk-secret-tail9999''',     # config.rs mask 测试 fixture
   '''sk-1234567890ab''',        # config.rs mask 测试 fixture
   '''sk-definitely-invalid''',  # test/RM_RETEST_STEPS.md 故意无效 key（RM-06 坏 key 拦截步骤）
+  '''sk-secret-123456''',       # test_ultra_fallback.py 脱敏回归夹具
 ]
