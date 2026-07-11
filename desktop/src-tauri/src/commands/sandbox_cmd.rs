@@ -1,19 +1,28 @@
 /// 官方模式：干净地打开用户【真实】的 Claude Science（不碰/复制真实凭证，抹掉 ANTHROPIC_*）。
 #[tauri::command]
 fn open_official() -> Result<(), String> {
-    let app_path = "/Applications/Claude Science.app";
-    let mut cmd = Command::new("open");
-    if Path::new(app_path).is_dir() {
-        cmd.arg(app_path);
+    let mut cmd = if cfg!(target_os = "macos") {
+        let app_path = "/Applications/Claude Science.app";
+        let mut command = Command::new("open");
+        if Path::new(app_path).is_dir() {
+            command.arg(app_path);
+        } else {
+            command.arg("-a").arg("Claude Science");
+        }
+        command
+    } else if cfg!(target_os = "linux") {
+        let science = science_bin().ok_or(
+            "未找到 Claude Science。请先安装 Linux 版 Claude Science，或设置 SCIENCE_BIN 指向 claude-science。",
+        )?;
+        Command::new(science)
     } else {
-        cmd.arg("-a").arg("Claude Science");
-    }
+        return Err("当前平台不支持打开 Claude Science".into());
+    };
     cmd.env_remove("ANTHROPIC_BASE_URL")
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN");
-    match cmd.status() {
-        Ok(s) if s.success() => Ok(()),
-        Ok(_) => Err("未能打开 Claude Science。请确认已安装官方 Claude Science。".into()),
+    match cmd.spawn() {
+        Ok(_) => Ok(()),
         Err(e) => Err(format!("打开官方 Claude Science 失败：{e}")),
     }
 }

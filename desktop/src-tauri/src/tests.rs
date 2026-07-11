@@ -151,6 +151,7 @@
     #[test]
     fn update_version_compare_handles_tags_and_padding() {
         assert_eq!(normalize_version_tag("v0.3.7"), "0.3.7");
+        assert_eq!(normalize_version_tag("linux-v0.3.7"), "0.3.7");
         assert!(version_is_newer("v0.3.10", "0.3.9"));
         assert!(version_is_newer("0.4.0-beta.1", "0.3.99"));
         assert!(!version_is_newer("v0.3.6", "0.3.6"));
@@ -162,13 +163,13 @@
         let body = r#"{
             "tag_name": "v0.3.7",
             "name": "BioCSSwitch v0.3.7",
-            "html_url": "https://github.com/HERRY423/BioCSSwitch/releases/tag/v0.3.7"
+            "html_url": "https://github.com/HERRY423/BioCSSwitch-Linux/releases/tag/linux-v0.3.7"
         }"#;
         let (tag, url, name) = parse_latest_release_json(body).unwrap();
         assert_eq!(tag, "v0.3.7");
         assert_eq!(
             url,
-            "https://github.com/HERRY423/BioCSSwitch/releases/tag/v0.3.7"
+            "https://github.com/HERRY423/BioCSSwitch-Linux/releases/tag/linux-v0.3.7"
         );
         assert_eq!(name.as_deref(), Some("BioCSSwitch v0.3.7"));
         assert!(parse_latest_release_json(r#"{"name":"missing tag"}"#).is_err());

@@ -34,3 +34,15 @@ def test_macos_package_triggers_for_biomedical_release_tags():
     push_trigger = workflow.split("  workflow_dispatch:", 1)[0]
     assert re.search(r'^ {6}- "bio-v\*"$', push_trigger, flags=re.MULTILINE)
     assert "startsWith(github.ref, 'refs/tags/bio-v')" in workflow
+
+
+def test_linux_package_builds_deb_and_appimage_for_linux_tags():
+    workflow = (ROOT / ".github" / "workflows" / "linux-package.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'runs-on: ubuntu-22.04' in workflow
+    assert 'libwebkit2gtk-4.1-dev' in workflow
+    assert '"linux-v*"' in workflow
+    assert 'bundle/deb/*.deb' in workflow
+    assert 'bundle/appimage/*.AppImage' in workflow
+    assert "gh release upload" in workflow

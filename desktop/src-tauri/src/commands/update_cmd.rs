@@ -1,9 +1,11 @@
-const RELEASE_LATEST_API: &str = "https://api.github.com/repos/HERRY423/BioCSSwitch/releases/latest";
+const RELEASE_LATEST_API: &str = "https://api.github.com/repos/HERRY423/BioCSSwitch-Linux/releases/latest";
 
-const RELEASE_LATEST_PAGE: &str = "https://github.com/HERRY423/BioCSSwitch/releases/latest";
+const RELEASE_LATEST_PAGE: &str = "https://github.com/HERRY423/BioCSSwitch-Linux/releases/latest";
 
 fn normalize_version_tag(tag: &str) -> String {
     tag.trim()
+        .strip_prefix("linux-v")
+        .unwrap_or(tag.trim())
         .trim_start_matches(|c| c == 'v' || c == 'V')
         .split(|c| c == '-' || c == '+')
         .next()
@@ -117,7 +119,7 @@ fn open_release_page() -> Result<(), String> {
 /// 打开「报 bug」页（预填 bug 模板）；用系统浏览器，走用户自己的代理。
 #[tauri::command]
 fn report_bug() -> Result<(), String> {
-    open_in_browser("https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml")
+    open_in_browser("https://github.com/HERRY423/BioCSSwitch-Linux/issues/new?template=bug_report.yml")
 }
 
 /// 在访达里打开日志目录 `~/.csswitch/logs`，方便用户附到 bug 反馈里（先自查有无密钥）。
@@ -125,7 +127,8 @@ fn report_bug() -> Result<(), String> {
 fn open_logs() -> Result<(), String> {
     let dir = config::default_dir().join("logs");
     let _ = std::fs::create_dir_all(&dir);
-    Command::new("open")
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    Command::new(opener)
         .arg(&dir)
         .status()
         .map_err(|e| format!("打开日志目录失败：{e}"))?;

@@ -1,0 +1,89 @@
+name: linux-package
+
+on:
+  push:
+    tags:
+      - "linux-v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the generated Linux installers to the selected release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package-linux-x64:
+    name: Build Linux x64 installers
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential curl file libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python development dependencies
+        run: python3 -m pip install -e ".[dev]"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release verification
+        run: bash scripts/release-verify.sh
+
+      - name: Build Debian package and AppImage
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run tauri build -- --bundles deb,appimage
+
+      - name: Upload Linux installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: BioCSSwitch-linux-x64-${{ github.run_id }}
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish installers to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/linux-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "BioCSSwitch Linux ${tag}" --generate-notes
+          fi
+          gh release upload "$tag" \
+            desktop/src-tauri/target/release/bundle/deb/*.deb \
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage \
+            --clobber

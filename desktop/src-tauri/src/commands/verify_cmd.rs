@@ -1,10 +1,10 @@
 /// 取 Claude Science 版本（`<bin> --version` 首个 token）。二进制不在 → "unknown"。
 /// 用于 verification 环境指纹：Science 更新后版本变了 → 提示"验证结果可能过期"。
 fn science_version() -> String {
-    if !Path::new(SCIENCE_BIN).is_file() {
+    let Some(science) = science_bin() else {
         return "unknown".to_string();
-    }
-    match Command::new(SCIENCE_BIN).arg("--version").output() {
+    };
+    match Command::new(science).arg("--version").output() {
         Ok(out) => {
             let s = String::from_utf8_lossy(&out.stdout);
             // 输出可能是 "claude-science 1.2.3" 或纯版本号；取含数字的首行首 token

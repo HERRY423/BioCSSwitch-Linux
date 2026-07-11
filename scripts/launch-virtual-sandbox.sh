@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # 启动一个【隔离 + 虚拟登录】的 Claude Science 沙箱：
 #   用本地自造的虚拟 OAuth 让 Science 认为已登录（virtual@localhost.invalid），
 #   推理经 ANTHROPIC_BASE_URL 导去本项目翻译代理 → 通义千问。
@@ -17,7 +17,8 @@
 #   再起沙箱: scripts/launch-virtual-sandbox.sh [--port 8990] [--proxy-url http://127.0.0.1:18991]
 set -euo pipefail
 
-PROJ="${0:A:h:h}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PROJ="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 SANDBOX_HOME="${SANDBOX_HOME:-$PROJ/.sandbox/home}"
 DATA_DIR="$SANDBOX_HOME/.claude-science"   # = auth_dir（Science 按 HOME 推导）
 REAL_DIR="$HOME/.claude-science"
@@ -43,12 +44,13 @@ done
 # —— 铁律断言：绝不使用真实目录 / 真实端口 ——
 [[ "$PORT" =~ ^[0-9]+$ ]] || { echo "拒绝：端口不是合法整数（$PORT）"; exit 1; }
 if (( 10#${PORT} == 8765 )); then echo "拒绝：端口 8765 是真实实例保留端口"; exit 1; fi
-_dd_real="${DATA_DIR:A}"; _real_real="${REAL_DIR:A}"
+_dd_real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$DATA_DIR")"
+_real_real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$REAL_DIR")"
 if [[ "$_dd_real" == "$_real_real" ]]; then echo "拒绝：data-dir 的真实路径指向真实目录"; exit 1; fi
 if [[ "$DRY_RUN" == "1" ]]; then echo "DRY-RUN OK：护栏通过，未启动沙箱。"; exit 0; fi
 
 # —— 首次：克隆运行时资产，绝不复制真实登录凭证 ——
-if [[ ! -d "$DATA_DIR/bin" ]]; then
+if [[ "$(uname -s)" == "Darwin" && ! -d "$DATA_DIR/bin" ]]; then
   echo "首次初始化沙箱运行时（APFS 克隆，只拷运行时、不拷真实登录）…"
   mkdir -p "$DATA_DIR"
   for asset in bin conda runtime seed-assets; do
@@ -62,8 +64,10 @@ fi
 # 优先级：显式 SCIENCE_BIN > 沙箱内已克隆 runtime > App 内置 binary。
 # 沙箱内 runtime 优先，App 内置 binary 仅作缺省 fallback。
 if [[ -z "$BIN" ]]; then
-  if [[ -x "$DATA_DIR/bin/claude-science" ]]; then
+  if [[ "$(uname -s)" == "Darwin" && -x "$DATA_DIR/bin/claude-science" ]]; then
     BIN="$DATA_DIR/bin/claude-science"
+  elif command -v claude-science >/dev/null 2>&1; then
+    BIN="$(command -v claude-science)"
   else
     BIN="$APP_BIN"
   fi
@@ -76,16 +80,18 @@ if [[ ! -x "$BIN" ]]; then echo "找不到 Science 二进制: $BIN"; exit 1; fi
 # 建一个独立、空密码、不自动锁的 login.keychain-db，并只在 HOME=$SANDBOX_HOME 的
 # 上下文里设为默认。真实登录钥匙串（~/Library/Keychains）零改动、零接触。
 SANDBOX_KC="$SANDBOX_HOME/Library/Keychains/login.keychain-db"
-if [[ ! -f "$SANDBOX_KC" ]]; then
+if [[ "$(uname -s)" == "Darwin" && ! -f "$SANDBOX_KC" ]]; then
   echo "创建沙箱专属钥匙串（隔离，空密码，不自动锁）…"
   mkdir -p "$SANDBOX_HOME/Library/Keychains"
   HOME="$SANDBOX_HOME" security create-keychain -p "" "$SANDBOX_KC" || true
 fi
 # 每次启动都确保：加入沙箱搜索表、设为默认、解锁、关自动锁（全部仅作用于沙箱 HOME）
-HOME="$SANDBOX_HOME" security list-keychains -d user -s "$SANDBOX_KC" >/dev/null 2>&1 || true
-HOME="$SANDBOX_HOME" security default-keychain -d user -s "$SANDBOX_KC" >/dev/null 2>&1 || true
-HOME="$SANDBOX_HOME" security unlock-keychain -p "" "$SANDBOX_KC" >/dev/null 2>&1 || true
-HOME="$SANDBOX_HOME" security set-keychain-settings "$SANDBOX_KC" >/dev/null 2>&1 || true
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  HOME="$SANDBOX_HOME" security list-keychains -d user -s "$SANDBOX_KC" >/dev/null 2>&1 || true
+  HOME="$SANDBOX_HOME" security default-keychain -d user -s "$SANDBOX_KC" >/dev/null 2>&1 || true
+  HOME="$SANDBOX_HOME" security unlock-keychain -p "" "$SANDBOX_KC" >/dev/null 2>&1 || true
+  HOME="$SANDBOX_HOME" security set-keychain-settings "$SANDBOX_KC" >/dev/null 2>&1 || true
+fi
 
 # —— 写入自造的虚拟 OAuth（每次覆盖，保持唯一 .enc；复用已有 encryption.key）——
 # 注意：不覆盖 HOME —— 伪造器要用【真实】HOME 判断是否误写真实凭证目录（护栏）。

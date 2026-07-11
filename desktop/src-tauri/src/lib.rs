@@ -35,7 +35,28 @@ use serde_json::json;
 use state::{key_fingerprint, kill_child, lock, AppState};
 use tauri::{Manager, State};
 
-const SCIENCE_BIN: &str = "/Applications/Claude Science.app/Contents/Resources/bin/claude-science";
+const MACOS_SCIENCE_BIN: &str = "/Applications/Claude Science.app/Contents/Resources/bin/claude-science";
+
+/// Locate Claude Science without inspecting or changing its data directory.
+/// Linux packages expose `claude-science` on PATH; `SCIENCE_BIN` remains an
+/// explicit override for portable or non-standard installations.
+fn science_bin() -> Option<PathBuf> {
+    for name in ["SCIENCE_BIN", "CSSWITCH_SCIENCE_BIN"] {
+        if let Some(value) = std::env::var_os(name) {
+            let path = PathBuf::from(value);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    if cfg!(target_os = "macos") {
+        let path = PathBuf::from(MACOS_SCIENCE_BIN);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    proc::find_exe("claude-science")
+}
 
 // ---------- adapter / profile 运行元信息 ----------
 /// adapter → 该 adapter 期望的 key 环境变量名（python 代理侧 PROVIDERS[...]["key_env"]）。
@@ -255,14 +276,21 @@ fn tail_file(path: &Path, max: usize) -> String {
     }
 }
 
-/// 用系统浏览器打开 URL（macOS `open`）。校验退出码：非零视为失败（P2c）。
+/// 用系统浏览器打开 URL。校验退出码：非零视为失败（P2c）。
 fn open_in_browser(url: &str) -> Result<(), String> {
-    let st = Command::new("open")
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "linux") {
+        "xdg-open"
+    } else {
+        return Err("当前平台不支持自动打开浏览器".into());
+    };
+    let st = Command::new(opener)
         .arg(url)
         .status()
         .map_err(|e| format!("打开浏览器失败：{e}"))?;
     if !st.success() {
-        return Err(format!("open 非零退出（{:?}）", st.code()));
+        return Err(format!("{opener} 非零退出（{:?}）", st.code()));
     }
     Ok(())
 }

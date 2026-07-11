@@ -15,6 +15,10 @@ KEY_PRESENT="${CSSWITCH_KEY_PRESENT:-0}"
 PROXY_PORT="${CSSWITCH_PROXY_PORT:-18991}"
 SANDBOX_PORT="${CSSWITCH_SANDBOX_PORT:-8990}"
 CONFIG="${CSSWITCH_CONFIG:-$HOME/.csswitch/config.json}"
+SCIENCE_BIN="${SCIENCE_BIN:-}"
+if [ -z "$SCIENCE_BIN" ] && command -v claude-science >/dev/null 2>&1; then
+  SCIENCE_BIN="$(command -v claude-science)"
+fi
 SCIENCE_BIN="${SCIENCE_BIN:-/Applications/Claude Science.app/Contents/Resources/bin/claude-science}"
 REAL_DIR="$HOME/.claude-science"
 

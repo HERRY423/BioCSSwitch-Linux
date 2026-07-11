@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-1d1d1f.svg" alt="macOS Apple Silicon">
+  <img src="https://img.shields.io/badge/platform-Linux%20x64-1d1d1f.svg" alt="Linux x64">
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-C25A34.svg" alt="Tauri 2">
 </p>
 
@@ -24,9 +24,9 @@ BioCSSwitch starts from a research goal, then prepares the local tools, evidence
 
 See the [research-platform overview and example outputs](./docs/index.html). Every AI-assisted result remains subject to researcher review.
 
-> The current app mainly targets macOS Apple Silicon. Because the app is not notarized yet, macOS may ask you to right-click and choose "Open" the first time.
+> This repository distributes the Linux x64 edition for Ubuntu 22.04+ and Debian 12+. Install Claude Science for Linux before launching BioCSSwitch.
 
-[Download latest release](../../releases/latest) · [Changelog](./CHANGELOG.md) · [Report a bug](https://github.com/HERRY423/BioCSSwitch/issues/new?template=bug_report.yml) · [Request a feature](https://github.com/HERRY423/BioCSSwitch/issues/new?template=feature_request.yml)
+[Download latest release](../../releases/latest) · [Changelog](./CHANGELOG.md) · [Report a bug](https://github.com/HERRY423/BioCSSwitch-Linux/issues/new?template=bug_report.yml) · [Request a feature](https://github.com/HERRY423/BioCSSwitch-Linux/issues/new?template=feature_request.yml)
 
 ## Contents
 
@@ -87,13 +87,14 @@ Claude Science sandbox
 Before starting, make sure you have:
 
 - [Claude Science](https://claude.com)
-- A macOS Apple Silicon device
+- Ubuntu 22.04+ or Debian 12+ on x64
+- Claude Science for Linux (install it from Anthropic's official Linux instructions)
 - A working third-party model API key
 - `python3` (the current proxy still needs it; moving this into Rust is planned)
 
-1. Download the latest `CSSwitch_*.dmg` from [GitHub Releases](../../releases/latest).
-2. Drag CSSwitch into Applications.
-3. If macOS blocks the first launch, right-click the app and choose "Open".
+1. Download either `*.deb` (Ubuntu/Debian) or `*.AppImage` (other supported x64 distributions) from [GitHub Releases](../../releases/latest).
+2. Install the Debian package with `sudo apt install ./BioCSSwitch_*.deb`, or make the AppImage executable with `chmod +x BioCSSwitch_*.AppImage` and run it.
+3. Make sure `claude-science` is available on your PATH. For an unusual install location, launch BioCSSwitch with `SCIENCE_BIN=/absolute/path/to/claude-science`.
 4. Keep the top mode set to "第三方模型" (third-party model).
 5. Click "+ 新建" (New), choose a provider, and enter your API key, model, and `base_url` when required.
 6. Click "创建" (Create), then choose "设为当前" (Set active) on the profile.
@@ -139,7 +140,7 @@ CSSwitch is not an official Claude service, and its locally generated launch tic
 - Anthropic-hosted remote MCP services are unavailable, including `pubmed`, `clinical-trials`, `chembl`, `biorxiv`, and other `*.mcp.claude.com` services.
 - Directory connectors, remote plugins, and cloud features that require real Claude account authorization may show session expired, unavailable, or skipped.
 - Third-party models differ in tool use, long context, thinking, image, and streaming compatibility. Native Anthropic endpoints are usually more reliable than OpenAI translation paths.
-- The macOS package is not notarized yet, so the first launch requires manual approval.
+- Linux installers are currently published for x64 only. The AppImage needs FUSE support on distributions that do not provide it by default.
 - The current runtime still needs `python3` for the proxy. Moving to a Rust single-binary proxy is on the roadmap.
 - Release bundles include the proxy's pure-Python `httpx + h2` runtime. Source checkouts should run `python3 -m pip install -e .`; the proxy then reuses pooled connections and negotiates HTTP/2 when supported upstream.
 
@@ -161,7 +162,7 @@ The desktop app UI is currently mainly Chinese. Multilingual README files do not
 When reporting a problem, please include:
 
 - CSSwitch version
-- macOS version and chip architecture
+- Linux distribution, version, and architecture
 - Provider and model
 - Steps to reproduce
 - Relevant logs from `~/.csswitch/logs/`

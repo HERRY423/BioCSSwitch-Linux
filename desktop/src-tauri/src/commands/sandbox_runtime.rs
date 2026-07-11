@@ -5,7 +5,7 @@ fn stop_sandbox_inner(app: &tauri::AppHandle, st: &mut AppState) -> Result<(), S
         Some(root) => {
             let stop = root.join("scripts/stop-science-sandbox.sh");
             if stop.is_file() {
-                match Command::new("zsh")
+                match Command::new("bash")
                     .arg(&stop)
                     .env("SANDBOX_HOME", sandbox_home())
                     .stdout(Stdio::null())
@@ -124,7 +124,10 @@ fn one_click_login_inner(
         }
     }
     let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
-    let status = Command::new("zsh")
+    let science = science_bin().ok_or(
+        "未找到 Claude Science。请先安装 Linux 版 Claude Science，或设置 SCIENCE_BIN 指向 claude-science。",
+    )?;
+    let status = Command::new("bash")
         .arg(&launch)
         .arg("--port")
         .arg(sport.to_string())
@@ -132,6 +135,7 @@ fn one_click_login_inner(
         .arg(&proxy_url)
         .arg("--skip-oauth-forge")
         .env("SANDBOX_HOME", sandbox_home())
+        .env("SCIENCE_BIN", science)
         .stdout(Stdio::from(logf))
         .stderr(Stdio::from(logf2))
         .status()
@@ -206,8 +210,8 @@ fn first_http_url(stdout: &str) -> Option<String> {
 fn sandbox_url(port: u16) -> String {
     let home = sandbox_home();
     let data_dir = home.join(".claude-science");
-    if Path::new(SCIENCE_BIN).is_file() {
-        if let Ok(out) = Command::new(SCIENCE_BIN)
+    if let Some(science) = science_bin() {
+        if let Ok(out) = Command::new(science)
             .arg("url")
             .arg("--data-dir")
             .arg(&data_dir)
@@ -228,8 +232,8 @@ fn sandbox_url(port: u16) -> String {
 fn sandbox_running_ours(port: u16) -> bool {
     let home = sandbox_home();
     let data_dir = home.join(".claude-science");
-    if Path::new(SCIENCE_BIN).is_file() {
-        match Command::new(SCIENCE_BIN)
+    if let Some(science) = science_bin() {
+        match Command::new(science)
             .arg("status")
             .arg("--data-dir")
             .arg(&data_dir)

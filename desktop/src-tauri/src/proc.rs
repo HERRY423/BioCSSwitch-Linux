@@ -285,9 +285,16 @@ pub fn which_via_login_shell(name: &str) -> Option<PathBuf> {
         return None;
     }
     let arg = format!("command -v {name} 2>/dev/null");
+    let shell = if cfg!(target_os = "linux") {
+        std::env::var_os("SHELL")
+            .filter(|candidate| Path::new(candidate).is_file())
+            .unwrap_or_else(|| "/bin/sh".into())
+    } else {
+        "zsh".into()
+    };
     // spawn + 轮询 + 超时 kill：病态 rc 卡死时**终止** zsh，绝不泄漏线程/进程（修 P3）。
-    let mut child = Command::new("zsh")
-        .args(["-lic", &arg])
+    let mut child = Command::new(shell)
+        .args(["-lc", &arg])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
