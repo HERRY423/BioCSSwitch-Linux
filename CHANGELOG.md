@@ -4,6 +4,20 @@
 
 > **约定**：已修问题从 [`docs/known-issues.md`](docs/known-issues.md)「毕业」到这里（发布即定稿）；未修/进行中留在 known-issues；硬 bug 的根因证据链存在 [`findings/`](findings/)。
 
+## [0.4.2] - 2026-07-12
+
+### Changed
+
+- Reworked the Linux desktop UI into a blue-and-white scientific visual system with clearer contrast and status hierarchy.
+- Reorganized settings into a conventional split workspace and responsive research-module grid.
+- Corrected the Chinese Linux README to document `.deb` and AppImage installation instead of macOS DMG and Gatekeeper steps.
+- Preserved existing model switching, Linux sandbox discovery, pack management, and research-launch behavior.
+
+### Release
+
+- Aligned Python, npm, Tauri, and Rust package metadata on `0.4.2`.
+- The `linux-v0.4.2` tag builds and publishes Linux x64 `.deb` and AppImage installers.
+
 ## [0.4.1] - 2026-07-10
 
 > Product repositioning: from model switching to an AI biomedical research platform.

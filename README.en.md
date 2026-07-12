@@ -4,6 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License">
+  <img src="https://img.shields.io/badge/release-0.4.2-1d63c6.svg" alt="BioCSSwitch Linux 0.4.2">
   <img src="https://img.shields.io/badge/platform-Linux%20x64-1d1d1f.svg" alt="Linux x64">
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-C25A34.svg" alt="Tauri 2">
 </p>
@@ -27,6 +28,12 @@ See the [research-platform overview and example outputs](./docs/index.html). Eve
 > This repository distributes the Linux x64 edition for Ubuntu 22.04+ and Debian 12+. Install Claude Science for Linux before launching BioCSSwitch.
 
 [Download latest release](../../releases/latest) · [Changelog](./CHANGELOG.md) · [Report a bug](https://github.com/HERRY423/BioCSSwitch-Linux/issues/new?template=bug_report.yml) · [Request a feature](https://github.com/HERRY423/BioCSSwitch-Linux/issues/new?template=feature_request.yml)
+
+## What's new in 0.4.2
+
+- A blue-and-white scientific visual system now unifies the research home and settings surfaces.
+- Connection profiles sit on the left, runtime and advanced controls stay on the right, and research modules use a compact two-column grid.
+- Linux x64 releases provide both Debian packages and AppImages; smaller windows automatically fall back to a single-column layout.
 
 ## Contents
 
